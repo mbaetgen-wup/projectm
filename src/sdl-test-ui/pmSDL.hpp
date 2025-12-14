@@ -27,6 +27,7 @@
 
 #pragma once
 
+#include "opengl.h"
 #include <SDL2/SDL.h>
 
 // Disable LOOPBACK and FAKE audio to enable microphone input
@@ -45,7 +46,6 @@
 // projectM SDL
 #include "audioCapture.hpp"
 #include "loopback.hpp"
-#include "opengl.h"
 #include "setup.hpp"
 
 

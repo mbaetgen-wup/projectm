@@ -2,6 +2,10 @@
    Include appropriate OpenGL headers for this platform.
 **/
 
+#ifdef __gl_h_
+#error "System GL header included before GLAD. Include opengl.h first."
+#endif
+
 #ifndef  __PROJECTM_OPENGL_H__
 #define  __PROJECTM_OPENGL_H__
 

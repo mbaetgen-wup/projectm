@@ -6,6 +6,10 @@ add_compile_definitions(
         $<IF:$<PLATFORM_ID:Windows>,STBI_NO_DDS,>
         )
 
+include_directories(
+        "${PROJECTM_SOURCE_DIR}/vendor/glad/include"
+        )
+
 add_subdirectory(Audio)
 add_subdirectory(MilkdropPreset)
 add_subdirectory(Renderer)
@@ -70,6 +74,7 @@ add_library(projectM
         $<TARGET_OBJECTS:SOIL2>
         $<TARGET_OBJECTS:projectM_main>
         $<TARGET_OBJECTS:projectM::Eval>
+        $<TARGET_OBJECTS:glad_obj>
         )
 
 target_include_directories(projectM
@@ -79,7 +84,6 @@ target_include_directories(projectM
 
 target_link_libraries(projectM
         PUBLIC
-        ${PROJECTM_OPENGL_LIBRARIES}
         libprojectM::API
         ${PROJECTM_FILESYSTEM_LIBRARY}
         )

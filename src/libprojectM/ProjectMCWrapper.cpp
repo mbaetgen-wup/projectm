@@ -1,10 +1,14 @@
 #include "ProjectMCWrapper.hpp"
 
+#include <CrossGlLoader.hpp>
 #include <projectM-4/projectM.h>
 
 #include <Logging.hpp>
 
 #include <Audio/AudioConstants.hpp>
+
+#include <SOIL2/soil2_gl_bridge.h>
+#include <SOIL2/SOIL2.h>
 
 #include <projectM-4/parameters.h>
 #include <projectM-4/render_opengl.h>
@@ -68,8 +72,16 @@ void projectm_free_string(const char* str)
 
 projectm_handle projectm_create()
 {
+    return projectm_create_with_opengl_load_proc(nullptr, nullptr);
+}
+
+projectm_handle projectm_create_with_opengl_load_proc(void* (*load_proc)(const char*, void*), void* user_data)
+{
     try
     {
+        libprojectM::Renderer::CrossGlLoader::Instance().Initialize(load_proc, user_data);
+        soil2_set_gl_resolver(&libprojectM::Renderer::CrossGlLoader::GladResolverThunk);
+        SOIL_init();
         auto projectMInstance = new libprojectM::projectMWrapper();
         return reinterpret_cast<projectm_handle>(projectMInstance);
     }
@@ -83,6 +95,7 @@ void projectm_destroy(projectm_handle instance)
 {
     auto projectMInstance = handle_to_instance(instance);
     delete projectMInstance;
+    libprojectM::Renderer::CrossGlLoader::Instance().Shutdown();
 }
 
 void projectm_load_preset_file(projectm_handle instance, const char* filename,

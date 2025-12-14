@@ -22,6 +22,8 @@ add_library(Renderer OBJECT
         Color.hpp
         CopyTexture.cpp
         CopyTexture.hpp
+        CrossGlLoader.cpp
+        CrossGlLoader.hpp
         FileScanner.cpp
         FileScanner.hpp
         Framebuffer.cpp
@@ -32,6 +34,7 @@ add_library(Renderer OBJECT
         MilkdropNoise.cpp
         MilkdropNoise.hpp
         OpenGL.h
+        PlatformLoader.h
         Point.hpp
         PresetTransition.cpp
         PresetTransition.hpp
@@ -76,6 +79,7 @@ target_link_libraries(Renderer
         GLM::GLM
         hlslparser
         SOIL2
+        glad
         )
 
 set_target_properties(Renderer PROPERTIES

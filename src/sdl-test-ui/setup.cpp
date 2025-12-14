@@ -174,12 +174,6 @@ projectMSDL *setupSDLApp() {
 
     SDL_GLContext glCtx = SDL_GL_CreateContext(win);
 
-#if defined(_WIN32)
-	GLenum err = glewInit();
-#endif /** _WIN32 */
-
-    dumpOpenGLInfo();
-
     SDL_SetWindowTitle(win, "projectM");
 
     SDL_GL_MakeCurrent(win, glCtx);  // associate GL context with main window
@@ -248,7 +242,6 @@ projectMSDL *setupSDLApp() {
     app->fakeAudio  = true;
 #endif
 
-    enableGLDebugOutput();
     configureLoopback(app);
 
 #if !FAKE_AUDIO && !WASAPI_LOOPBACK

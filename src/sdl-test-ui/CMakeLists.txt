@@ -22,7 +22,13 @@ target_link_libraries(projectM-Test-UI
         GLM::GLM
         SDL2::SDL2
         SDL2::SDL2main
+        ${PROJECTM_OPENGL_LIBRARIES}
         ${CMAKE_DL_LIBS}
+        )
+
+target_include_directories(projectM-Test-UI
+        PRIVATE
+        ${PROJECT_SOURCE_DIR}/vendor/glad/include
         )
 
 if(MSVC)
