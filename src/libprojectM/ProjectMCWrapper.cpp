@@ -1,12 +1,12 @@
 #include "ProjectMCWrapper.hpp"
 
-#include <CrossGlLoader.hpp>
 #include <projectM-4/projectM.h>
 
 #include <Logging.hpp>
 
 #include <Audio/AudioConstants.hpp>
 
+#include <Renderer/CrossGlLoader.hpp>
 #include <SOIL2/soil2_gl_bridge.h>
 #include <SOIL2/SOIL2.h>
 
@@ -79,10 +79,19 @@ projectm_handle projectm_create_with_opengl_load_proc(void* (*load_proc)(const c
 {
     try
     {
-        libprojectM::Renderer::CrossGlLoader::Instance().Initialize(load_proc, user_data);
+        // invoke loader to discover gl function pointer and init glad
+        auto success = libprojectM::Renderer::CrossGlLoader::Instance().Initialize(load_proc, user_data);
+        if (!success)
+        {
+            return nullptr;
+        }
+
+        // init SOIL2 gl functions
         soil2_set_gl_resolver(&libprojectM::Renderer::CrossGlLoader::GladResolverThunk);
         SOIL_init();
-        auto projectMInstance = new libprojectM::projectMWrapper();
+
+        // create projectM
+        auto* projectMInstance = new libprojectM::projectMWrapper();
         return reinterpret_cast<projectm_handle>(projectMInstance);
     }
     catch (...)

@@ -15,6 +15,12 @@ add_subdirectory(MilkdropPreset)
 add_subdirectory(Renderer)
 add_subdirectory(UserSprites)
 
+set(PROJECTM_LINK_GL_LIBS "")
+if (WIN32)
+    # windows libs need to link to opengl32.dll
+    set(PROJECTM_LINK_GL_LIBS "${PROJECTM_OPENGL_LIBRARIES}")
+endif()
+
 add_library(projectM_main OBJECT
         "${PROJECTM_EXPORT_HEADER}"
         Logging.cpp
@@ -86,6 +92,7 @@ target_link_libraries(projectM
         PUBLIC
         libprojectM::API
         ${PROJECTM_FILESYSTEM_LIBRARY}
+        ${PROJECTM_LINK_GL_LIBS}
         )
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
@@ -111,6 +118,7 @@ if(BUILD_SHARED_LIBS)
     target_link_libraries(projectM
             PUBLIC
             ${CMAKE_DL_LIBS}
+            ${PROJECTM_LINK_GL_LIBS}
             )
 else()
     target_compile_definitions(projectM_main

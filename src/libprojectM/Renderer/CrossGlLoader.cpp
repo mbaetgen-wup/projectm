@@ -5,11 +5,12 @@
 
 #include "CrossGlLoader.hpp"
 
-#include "Logging.hpp"
+#include <Logging.hpp>
 
 #include <array>
 #include <cstdio>
 
+// forward declare glad interfaces to contain dependency to this cpp
 namespace {
 
 using GladLoadFunc = void* (*) (const char* name);
@@ -51,7 +52,8 @@ auto CrossGlLoader::Initialize(UserResolver resolver, void* userData) -> bool
 
     if (LoadViaGlad())
     {
-        // If detection failed, fall back to a sensible default.
+        // If detection failed, but loading succeeded
+        // fall back to a sensible default
         if (m_backend == Backend::None)
         {
 #ifdef _WIN32

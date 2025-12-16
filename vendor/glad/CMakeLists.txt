@@ -59,21 +59,6 @@ set_target_properties(glad PROPERTIES
         )
 
 # platform link dependencies
-if (USE_GLES)
-    # EGL is not a system lib on all platforms
-    # on Linux, GLAD's egl.c needs dl for dlsym/dlopen
-    if (UNIX AND NOT APPLE)
-        target_link_libraries(glad PUBLIC dl)
-    endif()
-else()
-    # Desktop GL
-    if (WIN32)
-        target_link_libraries(glad PUBLIC opengl32)
-    elseif(APPLE)
-        target_link_libraries(glad PUBLIC "-framework OpenGL")
-    else()
-        # Linux/Unix with GLX: need X11 for XOpenDisplay etc.
-        find_package(X11 REQUIRED)
-        target_link_libraries(glad PUBLIC X11::X11 dl)
-    endif()
+if (UNIX AND NOT APPLE)
+    target_link_libraries(glad PUBLIC dl)
 endif()
