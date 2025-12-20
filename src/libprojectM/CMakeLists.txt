@@ -90,6 +90,7 @@ target_include_directories(projectM
 
 target_link_libraries(projectM
         PUBLIC
+        ${PROJECTM_LINK_GL_LIBS}
         libprojectM::API
         ${PROJECTM_FILESYSTEM_LIBRARY}
         )
@@ -117,7 +118,6 @@ if(BUILD_SHARED_LIBS)
     target_link_libraries(projectM
             PUBLIC
             ${CMAKE_DL_LIBS}
-            ${PROJECTM_LINK_GL_LIBS}
             )
 else()
     target_compile_definitions(projectM_main
