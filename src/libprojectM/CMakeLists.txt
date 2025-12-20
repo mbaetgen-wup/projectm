@@ -92,7 +92,6 @@ target_link_libraries(projectM
         PUBLIC
         libprojectM::API
         ${PROJECTM_FILESYSTEM_LIBRARY}
-        ${PROJECTM_LINK_GL_LIBS}
         )
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")

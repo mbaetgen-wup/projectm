@@ -1,5 +1,6 @@
 #include "setup.hpp"
 
+#include "opengl.h"
 #include "ConfigFile.h"
 
 #include <SDL2/SDL_hints.h>
@@ -47,7 +48,11 @@ std::string getConfigFilePath(std::string datadir_path) {
 #if defined _MSC_VER
     _mkdir(projectM_home.c_str());
 #else
-    mkdir(projectM_home.c_str(), 0755);
+    #ifdef _WIN32
+        mkdir(projectM_home.c_str());
+    #else
+        mkdir(projectM_home.c_str(), 0755);
+    #endif
 #endif
 
     projectM_home += "/config.inp";
@@ -181,6 +186,16 @@ projectMSDL *setupSDLApp() {
     if (avsync == -1) { // adaptive vsync not supported
         SDL_GL_SetSwapInterval(1); // enable updates synchronized with vertical retrace
     }
+
+#ifdef USE_GLES
+    if (!gladLoadGLES2(reinterpret_cast<GLADloadfunc>(SDL_GL_GetProcAddress))) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error loading GLAD for GLES2\n");
+    }
+#else
+    if (!gladLoadGL(reinterpret_cast<GLADloadfunc>(SDL_GL_GetProcAddress))) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error loading GLAD for GL Core Profile\n");
+    }
+#endif
 
     std::string base_path = DATADIR_PATH;
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Using data directory: %s\n", base_path.c_str());
