@@ -99,6 +99,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+// --- projectM patched GL discovery start ---
+
 #if defined(_WIN32) || defined(SOIL_PLATFORM_WIN32)
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -109,6 +111,8 @@
 #include <windows.h>
 
 #endif
+
+// --- projectM patched GL discovery end ---
 
 unsigned long SOIL_version() { return SOIL_COMPILED_VERSION; }
 

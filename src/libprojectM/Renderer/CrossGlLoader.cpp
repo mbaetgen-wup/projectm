@@ -163,13 +163,13 @@ void CrossGlLoader::ResolveProviderFunctions()
 #endif
     }
 
-    LOG_DEBUG([&] {
+    [&] {
         char buf[256];
         std::snprintf(buf, sizeof(buf), "CrossGlLoader: egl=%p gl=%p",
             reinterpret_cast<void*>(m_eglLib.Handle()),
             reinterpret_cast<void*>(m_glLib.Handle()));
-        return buf;
-    }());
+        LOG_DEBUG(buf);
+    }();
 
 }
 

@@ -13,7 +13,7 @@ extern "C" {
 
     typedef void* (*pm_soil_gl_resolver_t)(const char* name);
 
-    void soil2_set_gl_resolver(pm_soil_gl_resolver_t resolver);
+    void SOIL_GL_SetResolver(pm_soil_gl_resolver_t resolver);
     void* SOIL_GL_GetProcAddress(const char* proc);
 
 #ifdef __cplusplus

@@ -87,7 +87,7 @@ projectm_handle projectm_create_with_opengl_load_proc(void* (*load_proc)(const c
         }
 
         // init SOIL2 gl functions
-        soil2_set_gl_resolver(&libprojectM::Renderer::CrossGlLoader::GladResolverThunk);
+        SOIL_GL_SetResolver(&libprojectM::Renderer::CrossGlLoader::GladResolverThunk);
         SOIL_init();
 
         // create projectM

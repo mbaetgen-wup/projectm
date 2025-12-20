@@ -80,6 +80,7 @@ target_link_libraries(Renderer
         hlslparser
         SOIL2
         glad
+        ${PROJECTM_FILESYSTEM_LIBRARY}
         )
 
 set_target_properties(Renderer PROPERTIES

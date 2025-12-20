@@ -2,7 +2,7 @@
 
 static pm_soil_gl_resolver_t g_resolver = 0;
 
-void soil2_set_gl_resolver(pm_soil_gl_resolver_t resolver) {
+void SOIL_GL_SetResolver(pm_soil_gl_resolver_t resolver) {
     g_resolver = resolver;
 }
 

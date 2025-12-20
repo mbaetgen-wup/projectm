@@ -1,6 +1,6 @@
 #include "setup.hpp"
 
-#include "opengl.h"
+#include <projectM-4/logging.h>
 #include "ConfigFile.h"
 
 #include <SDL2/SDL_hints.h>
@@ -133,11 +133,39 @@ void enableGLDebugOutput() {
 #endif
 }
 
+namespace {
+void logMessage(const char* message, projectm_log_level severity, void* userData)
+{
+    switch (severity)
+    {
+        case PROJECTM_LOG_LEVEL_FATAL:
+        case PROJECTM_LOG_LEVEL_ERROR:
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "%s\n", message);
+            break;
+        case PROJECTM_LOG_LEVEL_WARN:
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "%s\n", message);
+            break;
+        case PROJECTM_LOG_LEVEL_TRACE:
+        case PROJECTM_LOG_LEVEL_DEBUG:
+            // redirect debug logs to info for now
+            //SDL_LogDebug(SDL_LOG_CATEGORY_APPLICATION, "%s\n", message);
+            //break;
+        case PROJECTM_LOG_LEVEL_NOTSET:
+        case PROJECTM_LOG_LEVEL_INFO:
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "%s\n", message);
+            break;
+    }
+}
+}
+
 // initialize SDL, openGL, config
 projectMSDL *setupSDLApp() {
     projectMSDL *app;
     seedRand();
-        
+
+    projectm_set_log_callback(&logMessage, false, nullptr);
+    projectm_set_log_level(PROJECTM_LOG_LEVEL_DEBUG, false);
+
     if (!initLoopback())
 		{
 			SDL_Log("Failed to initialize audio loopback device.");
