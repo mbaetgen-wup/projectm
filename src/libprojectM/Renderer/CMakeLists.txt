@@ -22,8 +22,6 @@ add_library(Renderer OBJECT
         Color.hpp
         CopyTexture.cpp
         CopyTexture.hpp
-        CrossGlLoader.cpp
-        CrossGlLoader.hpp
         FileScanner.cpp
         FileScanner.hpp
         Framebuffer.cpp
@@ -34,6 +32,8 @@ add_library(Renderer OBJECT
         MilkdropNoise.cpp
         MilkdropNoise.hpp
         OpenGL.h
+        PlatformGLResolver.cpp
+        PlatformGLResolver.hpp
         PlatformLoader.h
         Point.hpp
         PresetTransition.cpp

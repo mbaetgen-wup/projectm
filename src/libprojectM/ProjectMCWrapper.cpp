@@ -6,9 +6,9 @@
 
 #include <Audio/AudioConstants.hpp>
 
-#include <Renderer/CrossGlLoader.hpp>
-#include <SOIL2/SOIL2_gl_bridge.h>
+#include <Renderer/PlatformGLResolver.hpp>
 #include <SOIL2/SOIL2.h>
+#include <SOIL2/SOIL2_gl_bridge.h>
 
 #include <projectM-4/parameters.h>
 #include <projectM-4/render_opengl.h>
@@ -79,15 +79,15 @@ projectm_handle projectm_create_with_opengl_load_proc(void* (*load_proc)(const c
 {
     try
     {
-        // invoke loader to discover gl function pointer and init glad
-        auto success = libprojectM::Renderer::CrossGlLoader::Instance().Initialize(load_proc, user_data);
+        // invoke loader to discover gl function pointers and init glad
+        auto success = libprojectM::Renderer::Platform::GLResolver::Instance().Initialize(load_proc, user_data);
         if (!success)
         {
             return nullptr;
         }
 
         // init SOIL2 gl functions
-        SOIL_GL_SetResolver(&libprojectM::Renderer::CrossGlLoader::GladResolverThunk);
+        SOIL_GL_SetResolver(&libprojectM::Renderer::Platform::GLResolver::GladResolverThunk);
         SOIL_GL_Init();
 
         // create projectM
@@ -104,7 +104,7 @@ void projectm_destroy(projectm_handle instance)
 {
     auto projectMInstance = handle_to_instance(instance);
     delete projectMInstance;
-    libprojectM::Renderer::CrossGlLoader::Instance().Shutdown();
+    libprojectM::Renderer::Platform::GLResolver::Instance().Shutdown();
 }
 
 void projectm_load_preset_file(projectm_handle instance, const char* filename,

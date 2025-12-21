@@ -175,18 +175,18 @@ public:
         // Search the main executable first.
         if (HMODULE mainModule = ::GetModuleHandleA(nullptr))
         {
-            if (void* p = reinterpret_cast<void*>(::GetProcAddress(mainModule, name)))
+            if (void* ptr = reinterpret_cast<void*>(::GetProcAddress(mainModule, name)))
             {
-                return p;
+                return ptr;
             }
         }
 
         // Then search the default OpenGL module.
         if (HMODULE glModule = ::GetModuleHandleA("opengl32.dll"))
         {
-            if (void* p = reinterpret_cast<void*>(::GetProcAddress(glModule, name)))
+            if (void* ptr = reinterpret_cast<void*>(::GetProcAddress(glModule, name)))
             {
-                return p;
+                return ptr;
             }
         }
 

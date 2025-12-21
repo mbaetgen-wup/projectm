@@ -9,15 +9,32 @@ namespace libprojectM
 {
 namespace Renderer
 {
+namespace Platform
+{
 
 /**
  * @brief Backend describing which API/provider the current context appears to be using.
  */
 enum class Backend : std::uint8_t
 {
+    /**
+     * Backend detection was not successful or no specific loader is needed (e.g. Apple).
+     */
     None = 0,
+
+    /**
+     * Detected EGL backend (GL build), or GLES backend (ENABLE_GLES=ON build).
+     */
     EglGles,
+
+    /**
+     * Detected GLX backend (GL build only).
+     */
     GlxGl,
+
+    /**
+     * Detected WGL backend (GL build only).
+     */
     WglGl
 };
 
@@ -25,14 +42,14 @@ enum class Backend : std::uint8_t
  * @brief Optional user resolver callback.
  *
  * If provided, it is consulted first when resolving procedure addresses.
- * Return nullptr to allow the loader to continue probing.
+ * Return nullptr to allow the resolver to continue probing.
  */
 using UserResolver = void* (*)(const char* name, void* userData);
 
 /**
- * @brief Cross-platform runtime GL/GLES loader.
+ * @brief Cross-platform runtime GL/GLES resolver.
  *
- * This loader:
+ * This resolver:
  *  - Must be initialized after a GL/GLES context has been created and made current.
  *  - Probes for EGL/GLX/WGL by checking for a current context.
  *  - Uses GLAD2 non-MX entrypoints (gladLoadGL / gladLoadGLES2) via a universal resolver.
@@ -42,26 +59,29 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *      3) eglGetProcAddress / glXGetProcAddress* / wglGetProcAddress (when available)
  *      4) Symbols from opened libEGL / libGL / opengl32
  */
-class CrossGlLoader
+class GLResolver
 {
 public:
+    /**
+     * Opaque handle for gl functions.
+     */
     using GLapiproc = void*;
 
-    CrossGlLoader() = default;
-    ~CrossGlLoader() = default;
+    GLResolver() = default;
+    ~GLResolver() = default;
 
-    CrossGlLoader(const CrossGlLoader&) = delete;
-    auto operator=(const CrossGlLoader&) -> CrossGlLoader& = delete;
-    CrossGlLoader(CrossGlLoader&&) = delete;
-    auto operator=(CrossGlLoader&&) -> CrossGlLoader& = delete;
+    GLResolver(const GLResolver&) = delete;
+    auto operator=(const GLResolver&) -> GLResolver& = delete;
+    GLResolver(GLResolver&&) = delete;
+    auto operator=(GLResolver&&) -> GLResolver& = delete;
 
     /**
-     * @brief Returns the process-wide loader instance.
+     * @brief Returns the process-wide resolver instance.
      */
-    static auto Instance() -> CrossGlLoader&;
+    static auto Instance() -> GLResolver&;
 
     /**
-     * @brief Initializes the loader.
+     * @brief Initializes the resolver.
      *
      * @param resolver Optional user resolver callback.
      * @param userData Optional user pointer passed to resolver.
@@ -70,12 +90,12 @@ public:
     auto Initialize(UserResolver resolver = nullptr, void* userData = nullptr) -> bool;
 
     /**
-     * @brief Shuts down the loader and releases library handles.
+     * @brief Shuts down the resolver and releases library handles.
      */
     void Shutdown();
 
     /**
-     * @brief Returns true if the loader was successfully initialized.
+     * @brief Returns true if the resolver was successfully initialized.
      */
     auto IsLoaded() const -> bool;
 
@@ -85,7 +105,7 @@ public:
     auto CurrentBackend() const -> Backend;
 
     /**
-     * @brief Resolves a function pointer using the loader's universal resolver.
+     * @brief Resolves a function pointer by consulting all sources in priority order.
      *
      * @param name Function name.
      * @return Procedure address or nullptr.
@@ -93,19 +113,22 @@ public:
     auto GetProcAddress(const char* name) const -> GLapiproc;
 
     /**
-     * @brief Resolves a function pointer using the loader's universal resolver from a static context.
+     * @brief Resolves a function pointer by consulting all sources in priority order from a static context.
      *
      * @param name Function name.
      * @return Procedure address or nullptr.
      */
     static auto GladResolverThunk(const char* name) -> GLapiproc;
 private:
+    /**
+     * GL resolver function pointer type.
+     */
     using GetProcFunc = GLapiproc (*)(const char* name);
 
     void OpenNativeLibraries();
     void ResolveProviderFunctions();
     void DetectBackend();
-    auto LoadViaGlad() -> bool;
+    auto LoadGlad() -> bool;
     auto Resolve(const char* name) const -> GLapiproc;
 
     mutable std::mutex m_mutex;
@@ -124,5 +147,6 @@ private:
     GetProcFunc m_wglGetProcAddress{};
 };
 
+} // namespace Platform
 } // namespace Renderer
 } // namespace libprojectM

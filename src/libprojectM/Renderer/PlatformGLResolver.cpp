@@ -2,24 +2,27 @@
 //
 // Provides a universal resolver to find GL function pointers.
 
-#include "CrossGlLoader.hpp"
+#include "PlatformGLResolver.hpp"
 
-#include <Logging.hpp>
 #include "OpenGL.h"
+#include <Logging.hpp>
 
 #include <array>
 #include <cstdio>
 
 namespace libprojectM {
+
 namespace Renderer {
 
-auto CrossGlLoader::Instance() -> CrossGlLoader&
+namespace Platform {
+
+auto GLResolver::Instance() -> GLResolver&
 {
-    static CrossGlLoader instance;
+    static GLResolver instance;
     return instance;
 }
 
-auto CrossGlLoader::Initialize(UserResolver resolver, void* userData) -> bool
+auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
 {
     const std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -35,7 +38,7 @@ auto CrossGlLoader::Initialize(UserResolver resolver, void* userData) -> bool
     ResolveProviderFunctions();
     DetectBackend();
 
-    if (LoadViaGlad())
+    if (LoadGlad())
     {
         // If detection failed, but loading succeeded
         // fall back to a sensible default
@@ -55,7 +58,7 @@ auto CrossGlLoader::Initialize(UserResolver resolver, void* userData) -> bool
     return false;
 }
 
-void CrossGlLoader::Shutdown()
+void GLResolver::Shutdown()
 {
     const std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -73,26 +76,26 @@ void CrossGlLoader::Shutdown()
     m_glLib.Close();
 }
 
-auto CrossGlLoader::IsLoaded() const -> bool
+auto GLResolver::IsLoaded() const -> bool
 {
     const std::lock_guard<std::mutex> lock(m_mutex);
     return m_loaded;
 }
 
-auto CrossGlLoader::CurrentBackend() const -> Backend
+auto GLResolver::CurrentBackend() const -> Backend
 {
     const std::lock_guard<std::mutex> lock(m_mutex);
     return m_backend;
 }
 
-auto CrossGlLoader::GetProcAddress(const char* name) const -> GLapiproc
+auto GLResolver::GetProcAddress(const char* name) const -> GLapiproc
 {
     // NOTE: This method is used during GLAD loading. Avoid taking the mutex here to
     // prevent deadlocks if GLAD calls back into us while Initialize() is holding the lock
     return Resolve(name);
 }
 
-void CrossGlLoader::OpenNativeLibraries()
+void GLResolver::OpenNativeLibraries()
 {
     // Best-effort: macOS or minimal EGL setups may fail to open
 
@@ -111,7 +114,7 @@ void CrossGlLoader::OpenNativeLibraries()
     m_glLib.Open(kGlNames.data());
 }
 
-void CrossGlLoader::ResolveProviderFunctions()
+void GLResolver::ResolveProviderFunctions()
 {
     // EGL
     if (m_eglLib.IsOpen())
@@ -119,7 +122,7 @@ void CrossGlLoader::ResolveProviderFunctions()
         void* sym = m_eglLib.GetSymbol("eglGetProcAddress");
         if (sym == nullptr)
         {
-            sym = Platform::DynamicLibrary::FindGlobalSymbol("eglGetProcAddress");
+            sym = DynamicLibrary::FindGlobalSymbol("eglGetProcAddress");
         }
         m_eglGetProcAddress = reinterpret_cast<GetProcFunc>(sym);
     }
@@ -131,7 +134,7 @@ void CrossGlLoader::ResolveProviderFunctions()
         void* sym = m_glLib.GetSymbol("wglGetProcAddress");
         if (!sym)
         {
-            sym = Platform::DynamicLibrary::FindGlobalSymbol("wglGetProcAddress");
+            sym = DynamicLibrary::FindGlobalSymbol("wglGetProcAddress");
         }
         m_wglGetProcAddress = reinterpret_cast<GetProcFunc>(sym);
 #else
@@ -142,23 +145,23 @@ void CrossGlLoader::ResolveProviderFunctions()
         }
         if (sym == nullptr)
         {
-            sym = Platform::DynamicLibrary::FindGlobalSymbol("glXGetProcAddress");
+            sym = DynamicLibrary::FindGlobalSymbol("glXGetProcAddress");
         }
         m_glxGetProcAddress = reinterpret_cast<GetProcFunc>(sym);
 #endif
     }
 
-    [&] {
+     {
         char buf[256];
-        std::snprintf(buf, sizeof(buf), "CrossGlLoader: egl=%p gl=%p",
+        std::snprintf(buf, sizeof(buf), "[PlatformGLResolver] Library handles: egl=%p gl=%p",
             reinterpret_cast<void*>(m_eglLib.Handle()),
             reinterpret_cast<void*>(m_glLib.Handle()));
         LOG_DEBUG(buf);
-    }();
+    }
 
 }
 
-void CrossGlLoader::DetectBackend()
+void GLResolver::DetectBackend()
 {
     // Detect current context provider
     // This is best-effort: on some platforms (e.g. macOS/CGL) it may report "unknown"
@@ -168,12 +171,12 @@ void CrossGlLoader::DetectBackend()
 #ifndef _WIN32
     const bool usingGlx = m_glLib.IsOpen() && IsCurrentGlx(m_glLib);
 #else
-    const bool usingWgl = Platform::IsCurrentWgl();
+    const bool usingWgl = IsCurrentWgl();
 #endif
 
     if (usingEgl)
     {
-        LOG_DEBUG("CrossGlLoader: current context: EGL");
+        LOG_DEBUG("[PlatformGLResolver] current context: EGL");
         m_backend = Backend::EglGles;
         return;
     }
@@ -181,24 +184,24 @@ void CrossGlLoader::DetectBackend()
 #ifndef _WIN32
     if (usingGlx)
     {
-        LOG_DEBUG("CrossGlLoader: current context: GLX");
+        LOG_DEBUG("[PlatformGLResolver] current context: GLX");
         m_backend = Backend::GlxGl;
         return;
     }
 #else
     if (usingWgl)
     {
-        LOG_DEBUG("CrossGlLoader: current context: WGL");
+        LOG_DEBUG("[PlatformGLResolver] current context: WGL");
         m_backend = Backend::WglGl;
         return;
     }
 #endif
 
-    LOG_DEBUG("CrossGlLoader: current context: (unknown, will try generic loader)");
+    LOG_DEBUG("[PlatformGLResolver] current context: (unknown, will try generic loader)");
     m_backend = Backend::None;
 }
 
-auto CrossGlLoader::GladResolverThunk(const char* name) -> GLapiproc
+auto GLResolver::GladResolverThunk(const char* name) -> GLapiproc
 {
     return Instance().Resolve(name);
 }
@@ -207,11 +210,11 @@ namespace {
 // adapt external void* handle to GLAD type
 auto gladBridgeResolverThunk(const char* name) -> GLADapiproc
 {
-    return reinterpret_cast<GLADapiproc>(CrossGlLoader::GladResolverThunk(name));
+    return reinterpret_cast<GLADapiproc>(GLResolver::GladResolverThunk(name));
 }
 }
 
-auto CrossGlLoader::LoadViaGlad() -> bool
+auto GLResolver::LoadGlad() -> bool
 {
     int result = 0;
 
@@ -219,24 +222,24 @@ auto CrossGlLoader::LoadViaGlad() -> bool
     result = gladLoadGL(&gladBridgeResolverThunk);
     if (result != 0)
     {
-        LOG_DEBUG("CrossGlLoader: gladLoadGL() succeeded");
+        LOG_DEBUG("[PlatformGLResolver] gladLoadGL() succeeded");
         return true;
     }
-    LOG_DEBUG("CrossGlLoader: gladLoadGL() failed");
+    LOG_FATAL("[PlatformGLResolver] gladLoadGL() failed");
     return false;
 #else
     result = gladLoadGLES2(&gladBridgeResolverThunk);
     if (result != 0)
     {
-        LOG_DEBUG("CrossGlLoader: gladLoadGLES2() succeeded");
+        LOG_DEBUG("[PlatformGLResolver] gladLoadGLES2() succeeded");
         return true;
     }
-    LOG_DEBUG("CrossGlLoader: gladLoadGLES2() failed");
+    LOG_FATAL("[PlatformGLResolver] gladLoadGLES2() failed");
     return false;
 #endif
 }
 
-auto CrossGlLoader::Resolve(const char* name) const -> GLapiproc
+auto GLResolver::Resolve(const char* name) const -> GLapiproc
 {
     if (name == nullptr)
     {
@@ -253,7 +256,7 @@ auto CrossGlLoader::Resolve(const char* name) const -> GLapiproc
     }
 
     // 2) Global symbol table
-    if (void* ptr = Platform::DynamicLibrary::FindGlobalSymbol(name))
+    if (void* ptr = DynamicLibrary::FindGlobalSymbol(name))
     {
         return ptr;
     }
@@ -300,5 +303,6 @@ auto CrossGlLoader::Resolve(const char* name) const -> GLapiproc
     return nullptr;
 }
 
+} // namespace Platform
 } // namespace Renderer
 } // namespace libprojectM
