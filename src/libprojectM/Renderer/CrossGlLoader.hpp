@@ -45,6 +45,8 @@ using UserResolver = void* (*)(const char* name, void* userData);
 class CrossGlLoader
 {
 public:
+    using GLapiproc = void*;
+
     CrossGlLoader() = default;
     ~CrossGlLoader() = default;
 
@@ -88,7 +90,7 @@ public:
      * @param name Function name.
      * @return Procedure address or nullptr.
      */
-    auto GetProcAddress(const char* name) const -> void*;
+    auto GetProcAddress(const char* name) const -> GLapiproc;
 
     /**
      * @brief Resolves a function pointer using the loader's universal resolver from a static context.
@@ -96,15 +98,15 @@ public:
      * @param name Function name.
      * @return Procedure address or nullptr.
      */
-    static auto GladResolverThunk(const char* name) -> void*;
+    static auto GladResolverThunk(const char* name) -> GLapiproc;
 private:
-    using GetProcFunc = void* (*)(const char* name);
+    using GetProcFunc = GLapiproc (*)(const char* name);
 
     void OpenNativeLibraries();
     void ResolveProviderFunctions();
     void DetectBackend();
     auto LoadViaGlad() -> bool;
-    auto Resolve(const char* name) const -> void*;
+    auto Resolve(const char* name) const -> GLapiproc;
 
     mutable std::mutex m_mutex;
 

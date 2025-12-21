@@ -19,7 +19,7 @@
 #define SOIL_CHECK_FOR_GL_ERRORS 0
 
 // --- projectM patched GL discovery start ---
-#include "soil2_gl_bridge.h"
+#include "SOIL2_gl_bridge.h"
 
 #ifndef APIENTRY
 # if defined(_WIN32)
@@ -334,9 +334,9 @@ static int soil2_gl_inited = 0;
 
 
 
-void SOIL_init()
+void SOIL_GL_Init()
 {
-    /* Must be called after a GL context exists and AFTER soil2_set_gl_resolver(). */
+    /* Must be called after a GL context exists and AFTER SOIL_GL_SetResolver(). */
     if (soil2_gl_inited)
         return;
 
@@ -365,7 +365,7 @@ static void soil2_ensure_gl_inited(void)
 {
 	if(!soil2_gl_inited)
 	{
-		SOIL_init();
+		SOIL_GL_Init();
 	}
 }
 

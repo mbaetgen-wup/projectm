@@ -1,29 +1,14 @@
 // Cross-platform runtime GL/GLES loader using GLAD2 C API (non-MX).
 //
-// Only forward declares the GLAD loader entrypoints (gladLoadGL / gladLoadGLES2) and provides
-// a universal resolver.
+// Provides a universal resolver to find GL function pointers.
 
 #include "CrossGlLoader.hpp"
 
 #include <Logging.hpp>
+#include "OpenGL.h"
 
 #include <array>
 #include <cstdio>
-
-// forward declare glad interfaces to contain dependency to this cpp
-namespace {
-
-using GladLoadFunc = void* (*) (const char* name);
-
-extern "C" {
-#ifndef USE_GLES
-int gladLoadGL(GladLoadFunc load);
-#else
-int gladLoadGLES2(GladLoadFunc load);
-#endif
-}
-
-} // namespace
 
 namespace libprojectM {
 namespace Renderer {
@@ -100,7 +85,7 @@ auto CrossGlLoader::CurrentBackend() const -> Backend
     return m_backend;
 }
 
-auto CrossGlLoader::GetProcAddress(const char* name) const -> void*
+auto CrossGlLoader::GetProcAddress(const char* name) const -> GLapiproc
 {
     // NOTE: This method is used during GLAD loading. Avoid taking the mutex here to
     // prevent deadlocks if GLAD calls back into us while Initialize() is holding the lock
@@ -213,9 +198,17 @@ void CrossGlLoader::DetectBackend()
     m_backend = Backend::None;
 }
 
-auto CrossGlLoader::GladResolverThunk(const char* name) -> void*
+auto CrossGlLoader::GladResolverThunk(const char* name) -> GLapiproc
 {
     return Instance().Resolve(name);
+}
+
+namespace {
+// adapt external void* handle to GLAD type
+auto gladBridgeResolverThunk(const char* name) -> GLADapiproc
+{
+    return reinterpret_cast<GLADapiproc>(CrossGlLoader::GladResolverThunk(name));
+}
 }
 
 auto CrossGlLoader::LoadViaGlad() -> bool
@@ -223,7 +216,7 @@ auto CrossGlLoader::LoadViaGlad() -> bool
     int result = 0;
 
 #ifndef USE_GLES
-    result = gladLoadGL(&CrossGlLoader::GladResolverThunk);
+    result = gladLoadGL(&gladBridgeResolverThunk);
     if (result != 0)
     {
         LOG_DEBUG("CrossGlLoader: gladLoadGL() succeeded");
@@ -232,7 +225,7 @@ auto CrossGlLoader::LoadViaGlad() -> bool
     LOG_DEBUG("CrossGlLoader: gladLoadGL() failed");
     return false;
 #else
-    result = gladLoadGLES2(&CrossGlLoader::GladResolverThunk);
+    result = gladLoadGLES2(&gladBridgeResolverThunk);
     if (result != 0)
     {
         LOG_DEBUG("CrossGlLoader: gladLoadGLES2() succeeded");
@@ -243,7 +236,7 @@ auto CrossGlLoader::LoadViaGlad() -> bool
 #endif
 }
 
-auto CrossGlLoader::Resolve(const char* name) const -> void*
+auto CrossGlLoader::Resolve(const char* name) const -> GLapiproc
 {
     if (name == nullptr)
     {

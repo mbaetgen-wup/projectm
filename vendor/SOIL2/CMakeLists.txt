@@ -6,7 +6,7 @@ add_library(SOIL2 OBJECT
         ${CMAKE_CURRENT_SOURCE_DIR}/src/SOIL2/pkm_helper.h
         ${CMAKE_CURRENT_SOURCE_DIR}/src/SOIL2/SOIL2.c
         ${CMAKE_CURRENT_SOURCE_DIR}/src/SOIL2/wfETC.c
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/SOIL2/soil2_gl_bridge.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/SOIL2/SOIL2_gl_bridge.c
         )
 
 target_include_directories(SOIL2

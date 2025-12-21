@@ -1,8 +1,8 @@
-#include "soil2_gl_bridge.h"
+#include "SOIL2_gl_bridge.h"
 
-static pm_soil_gl_resolver_t g_resolver = 0;
+static soil_gl_resolver_t g_resolver = 0;
 
-void SOIL_GL_SetResolver(pm_soil_gl_resolver_t resolver) {
+void SOIL_GL_SetResolver(soil_gl_resolver_t resolver) {
     g_resolver = resolver;
 }
 

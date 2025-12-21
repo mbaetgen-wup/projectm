@@ -7,7 +7,7 @@
 #include <Audio/AudioConstants.hpp>
 
 #include <Renderer/CrossGlLoader.hpp>
-#include <SOIL2/soil2_gl_bridge.h>
+#include <SOIL2/SOIL2_gl_bridge.h>
 #include <SOIL2/SOIL2.h>
 
 #include <projectM-4/parameters.h>
@@ -88,7 +88,7 @@ projectm_handle projectm_create_with_opengl_load_proc(void* (*load_proc)(const c
 
         // init SOIL2 gl functions
         SOIL_GL_SetResolver(&libprojectM::Renderer::CrossGlLoader::GladResolverThunk);
-        SOIL_init();
+        SOIL_GL_Init();
 
         // create projectM
         auto* projectMInstance = new libprojectM::projectMWrapper();
