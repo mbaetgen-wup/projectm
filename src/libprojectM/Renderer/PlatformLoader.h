@@ -197,7 +197,7 @@ public:
     }
 
 private:
-    LibHandle m_handle{};
+    LibHandle m_handle{};          //!< Library handle used to access the system library.
 };
 
 /**

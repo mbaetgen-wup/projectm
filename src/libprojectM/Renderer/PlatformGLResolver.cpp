@@ -21,7 +21,9 @@ namespace Platform {
 
 GLResolver::~GLResolver()
 {
-    Shutdown();
+    // make sure handles are released
+    m_eglLib.Close();
+    m_glLib.Close();
 }
 
 auto GLResolver::Instance() -> std::shared_ptr<GLResolver>
@@ -62,18 +64,23 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
 
     if (m_userResolver == nullptr)
     {
+        // need to find source for gl functions
+        // open libs and detect backend
         OpenNativeLibraries();
         ResolveProviderFunctions();
         DetectBackend();
     }
     else
     {
+        // user resolver was provided
+        // we *should* be able to get all gl functions from the resolver
+        // using user resolver + global symbol fallback
         m_backend = Backend::UserResolver;
     }
 
     if (LoadGlad())
     {
-        // set default if detection failed, but loading succeeded
+        // set default in case detection failed, but loading succeeded
         SetBackendDefault();
 
         // init SOIL2 gl functions
@@ -181,7 +188,7 @@ void GLResolver::ResolveProviderFunctions()
 
     {
         char buf[256];
-        std::snprintf(buf, sizeof(buf), "[PlatformGLResolver] Library handles: egl=%p gl=%p",
+        std::snprintf(buf, sizeof(buf), "[GLResolver] Library handles: egl=%p gl=%p",
             reinterpret_cast<void*>(m_eglLib.Handle()),
             reinterpret_cast<void*>(m_glLib.Handle()));
         LOG_DEBUG(buf);
@@ -204,7 +211,7 @@ void GLResolver::DetectBackend()
 
     if (usingEgl)
     {
-        LOG_DEBUG("[PlatformGLResolver] current context: EGL");
+        LOG_DEBUG("[GLResolver] current context: EGL");
         m_backend = Backend::EglGles;
         return;
     }
@@ -212,20 +219,20 @@ void GLResolver::DetectBackend()
 #ifndef _WIN32
     if (usingGlx)
     {
-        LOG_DEBUG("[PlatformGLResolver] current context: GLX");
+        LOG_DEBUG("[GLResolver] current context: GLX");
         m_backend = Backend::GlxGl;
         return;
     }
 #else
     if (usingWgl)
     {
-        LOG_DEBUG("[PlatformGLResolver] current context: WGL");
+        LOG_DEBUG("[GLResolver] current context: WGL");
         m_backend = Backend::WglGl;
         return;
     }
 #endif
 
-    LOG_DEBUG("[PlatformGLResolver] current context: (unknown, will try generic loader)");
+    LOG_DEBUG("[GLResolver] current context: (unknown, will try generic loader)");
     m_backend = Backend::None;
 }
 
@@ -235,11 +242,20 @@ auto GLResolver::GladResolverThunk(const char* name) -> GLapiproc
 }
 
 namespace {
-// adapt external void* handle to GLAD type
+
+/**
+ * Resolves a GL function by name using GladResolverThunk.
+ * Adapt external void* handle to GLAD type
+ *
+ * @param name GL function name.
+ *
+ * @return Function pointer as GLADapiproc.
+ */
 auto gladBridgeResolverThunk(const char* name) -> GLADapiproc
 {
     return reinterpret_cast<GLADapiproc>(GLResolver::GladResolverThunk(name));
 }
+
 }
 
 auto GLResolver::LoadGlad() -> bool
@@ -250,19 +266,19 @@ auto GLResolver::LoadGlad() -> bool
     result = gladLoadGL(&gladBridgeResolverThunk);
     if (result != 0)
     {
-        LOG_DEBUG("[PlatformGLResolver] gladLoadGL() succeeded");
+        LOG_DEBUG("[GLResolver] gladLoadGL() succeeded");
         return true;
     }
-    LOG_FATAL("[PlatformGLResolver] gladLoadGL() failed");
+    LOG_FATAL("[GLResolver] gladLoadGL() failed");
     return false;
 #else
     result = gladLoadGLES2(&gladBridgeResolverThunk);
     if (result != 0)
     {
-        LOG_DEBUG("[PlatformGLResolver] gladLoadGLES2() succeeded");
+        LOG_DEBUG("[GLResolver] gladLoadGLES2() succeeded");
         return true;
     }
-    LOG_FATAL("[PlatformGLResolver] gladLoadGLES2() failed");
+    LOG_FATAL("[GLResolver] gladLoadGLES2() failed");
     return false;
 #endif
 }

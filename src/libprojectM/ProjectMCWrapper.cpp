@@ -5,10 +5,7 @@
 #include <Logging.hpp>
 
 #include <Audio/AudioConstants.hpp>
-
 #include <Renderer/PlatformGLResolver.hpp>
-#include <SOIL2/SOIL2.h>
-#include <SOIL2/SOIL2_gl_bridge.h>
 
 #include <projectM-4/parameters.h>
 #include <projectM-4/render_opengl.h>
@@ -88,7 +85,7 @@ projectm_handle projectm_create_with_opengl_load_proc(void* (*load_proc)(const c
         auto glResolver = libprojectM::Renderer::Platform::GLResolver::Instance();
 
         // init resolver to discover gl function pointers and init glad
-        // init is guarded internally, so it actually only happens once
+        // Initialize() is guarded internally, may be executed multiple times
         auto success = glResolver->Initialize(load_proc, user_data);
         if (!success)
         {

@@ -138,20 +138,19 @@ private:
     auto LoadGlad() -> bool;
     auto Resolve(const char* name) const -> GLapiproc;
 
-    mutable std::mutex m_mutex;
+    mutable std::mutex m_mutex;                   //!< Mutex to synchronize initialization and access.
+    bool m_loaded{false};                         //!< True if the resolver is initialized.
+    Backend m_backend{ Backend::None };           //!< Detected GL backend.
 
-    bool m_loaded{};
-    Backend m_backend{ Backend::None };
+    UserResolver m_userResolver{nullptr};         //!< User provided function resolver.
+    void* m_userData{nullptr};                    //!< User data to pass to user provided function resolver.
 
-    UserResolver m_userResolver{};
-    void* m_userData{};
+    DynamicLibrary m_eglLib;                      //!< EGL library handle. Optional, may not be assigned.
+    DynamicLibrary m_glLib;                       //!< Detected GL backend. Optional, may not be assigned.
 
-    Platform::DynamicLibrary m_eglLib;
-    Platform::DynamicLibrary m_glLib;
-
-    GetProcFunc m_eglGetProcAddress{};
-    GetProcFunc m_glxGetProcAddress{};
-    GetProcFunc m_wglGetProcAddress{};
+    GetProcFunc m_eglGetProcAddress{nullptr};     //!< Function pointer to EGL proc resolver function.
+    GetProcFunc m_glxGetProcAddress{nullptr};     //!< Function pointer to GLX proc resolver function.
+    GetProcFunc m_wglGetProcAddress{nullptr};     //!< Function pointer to WGL proc resolver function.
 };
 
 } // namespace Platform

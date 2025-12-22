@@ -16,7 +16,7 @@ extern "C" {
      */
     typedef void* (*soil_gl_resolver_t)(const char* name);
 
-/**
+    /**
      * Sets the GL function resolver for SOIL2.
      *
      * @param resolver The resolver function to use.
@@ -29,7 +29,7 @@ extern "C" {
      * @param proc GL Function name.
      * @return Resolved function pointer for the given function name, or 0 if the function could not be resolved.
      */
-void* SOIL_GL_GetProcAddress(const char* proc);
+     void* SOIL_GL_GetProcAddress(const char* proc);
 
 #ifdef __cplusplus
 }
