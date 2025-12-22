@@ -50,7 +50,7 @@ void GLResolver::SetBackendDefault()
 
 auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
 {
-    const std::scoped_lock<std::mutex> lock(m_mutex);
+    const std::lock_guard<std::mutex> lock(m_mutex);
 
     if (m_loaded)
     {
@@ -88,7 +88,7 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
 
 void GLResolver::Shutdown()
 {
-    const std::scoped_lock<std::mutex> lock(m_mutex);
+    const std::lock_guard<std::mutex> lock(m_mutex);
 
     m_loaded = false;
     m_backend = Backend::None;
@@ -106,13 +106,13 @@ void GLResolver::Shutdown()
 
 auto GLResolver::IsLoaded() const -> bool
 {
-    const std::scoped_lock<std::mutex> lock(m_mutex);
+    const std::lock_guard<std::mutex> lock(m_mutex);
     return m_loaded;
 }
 
 auto GLResolver::CurrentBackend() const -> Backend
 {
-    const std::scoped_lock<std::mutex> lock(m_mutex);
+    const std::lock_guard<std::mutex> lock(m_mutex);
     return m_backend;
 }
 
