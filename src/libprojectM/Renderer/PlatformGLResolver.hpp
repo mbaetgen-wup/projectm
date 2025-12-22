@@ -3,6 +3,7 @@
 #include "PlatformLoader.h"
 
 #include <cstdint>
+#include <memory>
 #include <mutex>
 
 namespace libprojectM
@@ -35,7 +36,12 @@ enum class Backend : std::uint8_t
     /**
      * Detected WGL backend (GL build only).
      */
-    WglGl
+    WglGl,
+
+    /**
+     * User resolver is used, no backend detection.
+     */
+    UserResolver
 };
 
 /**
@@ -68,7 +74,7 @@ public:
     using GLapiproc = void*;
 
     GLResolver() = default;
-    ~GLResolver() = default;
+    ~GLResolver();
 
     GLResolver(const GLResolver&) = delete;
     auto operator=(const GLResolver&) -> GLResolver& = delete;
@@ -78,7 +84,7 @@ public:
     /**
      * @brief Returns the process-wide resolver instance.
      */
-    static auto Instance() -> GLResolver&;
+    static auto Instance() -> std::shared_ptr<GLResolver>;
 
     /**
      * @brief Initializes the resolver.
@@ -128,6 +134,7 @@ private:
     void OpenNativeLibraries();
     void ResolveProviderFunctions();
     void DetectBackend();
+    void SetBackendDefault();
     auto LoadGlad() -> bool;
     auto Resolve(const char* name) const -> GLapiproc;
 

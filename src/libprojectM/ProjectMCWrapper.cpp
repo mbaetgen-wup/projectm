@@ -18,6 +18,11 @@
 
 namespace libprojectM {
 
+projectMWrapper::projectMWrapper(const std::shared_ptr<Renderer::Platform::GLResolver>& glResolver)
+    : ProjectM(glResolver)
+{
+}
+
 void projectMWrapper::PresetSwitchRequestedEvent(bool isHardCut) const
 {
     if (m_presetSwitchRequestedEventCallback)
@@ -79,19 +84,19 @@ projectm_handle projectm_create_with_opengl_load_proc(void* (*load_proc)(const c
 {
     try
     {
-        // invoke loader to discover gl function pointers and init glad
-        auto success = libprojectM::Renderer::Platform::GLResolver::Instance().Initialize(load_proc, user_data);
+        // obtain shared resolver instance
+        auto glResolver = libprojectM::Renderer::Platform::GLResolver::Instance();
+
+        // init resolver to discover gl function pointers and init glad
+        // init is guarded internally, so it actually only happens once
+        auto success = glResolver->Initialize(load_proc, user_data);
         if (!success)
         {
             return nullptr;
         }
 
-        // init SOIL2 gl functions
-        SOIL_GL_SetResolver(&libprojectM::Renderer::Platform::GLResolver::GladResolverThunk);
-        SOIL_GL_Init();
-
         // create projectM
-        auto* projectMInstance = new libprojectM::projectMWrapper();
+        auto* projectMInstance = new libprojectM::projectMWrapper(glResolver);
         return reinterpret_cast<projectm_handle>(projectMInstance);
     }
     catch (...)
@@ -104,7 +109,6 @@ void projectm_destroy(projectm_handle instance)
 {
     auto projectMInstance = handle_to_instance(instance);
     delete projectMInstance;
-    libprojectM::Renderer::Platform::GLResolver::Instance().Shutdown();
 }
 
 void projectm_load_preset_file(projectm_handle instance, const char* filename,

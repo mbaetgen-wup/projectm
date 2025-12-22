@@ -5,6 +5,9 @@
 #include "PlatformGLResolver.hpp"
 
 #include "OpenGL.h"
+#include "SOIL2/SOIL2_gl_bridge.h"
+#include "SOIL2/SOIL2.h"
+
 #include <Logging.hpp>
 
 #include <array>
@@ -16,15 +19,38 @@ namespace Renderer {
 
 namespace Platform {
 
-auto GLResolver::Instance() -> GLResolver&
+GLResolver::~GLResolver()
 {
-    static GLResolver instance;
+    Shutdown();
+}
+
+auto GLResolver::Instance() -> std::shared_ptr<GLResolver>
+{
+    static const std::shared_ptr<GLResolver> instance = std::make_shared<GLResolver>();
     return instance;
+}
+
+void GLResolver::SetBackendDefault()
+{
+    if (m_backend == Backend::None)
+    {
+#ifdef USE_GLES
+        m_backend = Backend::EglGles;
+#else
+
+#ifdef _WIN32
+        m_backend = Backend::WglGl;
+#else // _WIN32
+        m_backend = Backend::GlxGl;
+#endif // _WIN32
+
+#endif // USE_GLES
+    }
 }
 
 auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
 {
-    const std::lock_guard<std::mutex> lock(m_mutex);
+    const std::scoped_lock<std::mutex> lock(m_mutex);
 
     if (m_loaded)
     {
@@ -34,33 +60,35 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
     m_userResolver = resolver;
     m_userData = userData;
 
-    OpenNativeLibraries();
-    ResolveProviderFunctions();
-    DetectBackend();
+    if (m_userResolver == nullptr)
+    {
+        OpenNativeLibraries();
+        ResolveProviderFunctions();
+        DetectBackend();
+    }
+    else
+    {
+        m_backend = Backend::UserResolver;
+    }
 
     if (LoadGlad())
     {
-        // If detection failed, but loading succeeded
-        // fall back to a sensible default
-        if (m_backend == Backend::None)
-        {
-#ifdef _WIN32
-            m_backend = Backend::WglGl;
-#else
-            m_backend = Backend::GlxGl;
-#endif
-        }
+        // set default if detection failed, but loading succeeded
+        SetBackendDefault();
+
+        // init SOIL2 gl functions
+        SOIL_GL_SetResolver(&GLResolver::GladResolverThunk);
+        SOIL_GL_Init();
 
         m_loaded = true;
-        return true;
     }
 
-    return false;
+    return m_loaded;
 }
 
 void GLResolver::Shutdown()
 {
-    const std::lock_guard<std::mutex> lock(m_mutex);
+    const std::scoped_lock<std::mutex> lock(m_mutex);
 
     m_loaded = false;
     m_backend = Backend::None;
@@ -78,13 +106,13 @@ void GLResolver::Shutdown()
 
 auto GLResolver::IsLoaded() const -> bool
 {
-    const std::lock_guard<std::mutex> lock(m_mutex);
+    const std::scoped_lock<std::mutex> lock(m_mutex);
     return m_loaded;
 }
 
 auto GLResolver::CurrentBackend() const -> Backend
 {
-    const std::lock_guard<std::mutex> lock(m_mutex);
+    const std::scoped_lock<std::mutex> lock(m_mutex);
     return m_backend;
 }
 
@@ -151,7 +179,7 @@ void GLResolver::ResolveProviderFunctions()
 #endif
     }
 
-     {
+    {
         char buf[256];
         std::snprintf(buf, sizeof(buf), "[PlatformGLResolver] Library handles: egl=%p gl=%p",
             reinterpret_cast<void*>(m_eglLib.Handle()),
@@ -203,7 +231,7 @@ void GLResolver::DetectBackend()
 
 auto GLResolver::GladResolverThunk(const char* name) -> GLapiproc
 {
-    return Instance().Resolve(name);
+    return Instance()->Resolve(name);
 }
 
 namespace {
