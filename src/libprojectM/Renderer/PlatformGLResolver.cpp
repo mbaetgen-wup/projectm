@@ -28,7 +28,16 @@ GLResolver::~GLResolver()
 
 auto GLResolver::Instance() -> std::shared_ptr<GLResolver>
 {
-    static const std::shared_ptr<GLResolver> instance = std::make_shared<GLResolver>();
+    // observe resolver instance with a weak pointer
+    // so that it is shared, but released once the last
+    // client shared_ptr is released
+    static std::weak_ptr<GLResolver> sharedInstance;
+    auto instance = sharedInstance.lock();
+    if (!instance)
+    {
+        instance = std::make_shared<GLResolver>();
+        sharedInstance = instance;
+    }
     return instance;
 }
 
