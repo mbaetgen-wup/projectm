@@ -187,11 +187,11 @@ void GLResolver::ResolveProviderFunctions()
     }
 
     {
-        char buf[256];
-        std::snprintf(buf, sizeof(buf), "[GLResolver] Library handles: egl=%p gl=%p",
+        std::array<char, 256> buf{};
+        std::snprintf(buf.data(), buf.size(), "[GLResolver] Library handles: egl=%p gl=%p",
             reinterpret_cast<void*>(m_eglLib.Handle()),
             reinterpret_cast<void*>(m_glLib.Handle()));
-        LOG_DEBUG(buf);
+        LOG_DEBUG(std::string(buf.data()));
     }
 
 }
@@ -211,7 +211,7 @@ void GLResolver::DetectBackend()
 
     if (usingEgl)
     {
-        LOG_DEBUG("[GLResolver] current context: EGL");
+        LOG_DEBUG("[GLResolver] Current context: EGL");
         m_backend = Backend::EglGles;
         return;
     }
@@ -219,20 +219,20 @@ void GLResolver::DetectBackend()
 #ifndef _WIN32
     if (usingGlx)
     {
-        LOG_DEBUG("[GLResolver] current context: GLX");
+        LOG_DEBUG("[GLResolver] Current context: GLX");
         m_backend = Backend::GlxGl;
         return;
     }
 #else
     if (usingWgl)
     {
-        LOG_DEBUG("[GLResolver] current context: WGL");
+        LOG_DEBUG("[GLResolver] Current context: WGL");
         m_backend = Backend::WglGl;
         return;
     }
 #endif
 
-    LOG_DEBUG("[GLResolver] current context: (unknown, will try generic loader)");
+    LOG_DEBUG("[GLResolver] Current context: (unknown, will try generic loader)");
     m_backend = Backend::None;
 }
 

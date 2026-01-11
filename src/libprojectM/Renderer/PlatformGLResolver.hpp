@@ -26,22 +26,22 @@ enum class Backend : std::uint8_t
     /**
      * Detected EGL backend (GL build), or GLES backend (ENABLE_GLES=ON build).
      */
-    EglGles,
+    EglGles = 1,
 
     /**
      * Detected GLX backend (GL build only).
      */
-    GlxGl,
+    GlxGl = 2,
 
     /**
      * Detected WGL backend (GL build only).
      */
-    WglGl,
+    WglGl = 3,
 
     /**
      * User resolver is used, no backend detection.
      */
-    UserResolver
+    UserResolver = 4
 };
 
 /**
@@ -142,11 +142,11 @@ private:
     bool m_loaded{false};                         //!< True if the resolver is initialized.
     Backend m_backend{ Backend::None };           //!< Detected GL backend.
 
-    UserResolver m_userResolver{nullptr};         //!< User provided function resolver.
+    UserResolver m_userResolver{nullptr};         //!< User provided function resolver. Optional, may be null.
     void* m_userData{nullptr};                    //!< User data to pass to user provided function resolver.
 
-    DynamicLibrary m_eglLib;                      //!< EGL library handle. Optional, may not be assigned.
-    DynamicLibrary m_glLib;                       //!< Detected GL backend. Optional, may not be assigned.
+    DynamicLibrary m_eglLib;                      //!< EGL library handle. Optional, may be null.
+    DynamicLibrary m_glLib;                       //!< GL library handle. Optional, may be null.
 
     GetProcFunc m_eglGetProcAddress{nullptr};     //!< Function pointer to EGL proc resolver function.
     GetProcFunc m_glxGetProcAddress{nullptr};     //!< Function pointer to GLX proc resolver function.
