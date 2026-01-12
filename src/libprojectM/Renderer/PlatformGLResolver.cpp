@@ -37,7 +37,7 @@ auto GLResolver::Instance() -> std::shared_ptr<GLResolver>
     // client shared_ptr is released
     static std::weak_ptr<GLResolver> sharedInstance;
     auto instance = sharedInstance.lock();
-    if (!instance)
+    if (instance == nullptr)
     {
         instance = std::make_shared<GLResolver>();
         sharedInstance = instance;

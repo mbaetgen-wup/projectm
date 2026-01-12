@@ -84,7 +84,7 @@ projectm_handle projectm_create_with_opengl_load_proc(void* (*load_proc)(const c
         // obtain shared resolver instance
         auto glResolver = libprojectM::Renderer::Platform::GLResolver::Instance();
         // init resolver to discover gl function pointers and init GLAD
-        // Initialize() is guarded internally, may be executed multiple times
+        // Initialize() is guarded internally, may be called multiple times
         auto success = glResolver->Initialize(load_proc, user_data);
         if (!success)
         {
