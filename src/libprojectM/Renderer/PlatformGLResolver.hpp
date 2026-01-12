@@ -39,9 +39,14 @@ enum class Backend : std::uint8_t
     WglGl = 3,
 
     /**
+     * WegGL proc resolver (Emscripten only).
+     */
+    WebGL = 4,
+
+    /**
      * User resolver is used, no backend detection.
      */
-    UserResolver = 4
+    UserResolver = 5
 };
 
 /**
@@ -59,11 +64,14 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *  - Must be initialized after a GL/GLES context has been created and made current.
  *  - Probes for EGL/GLX/WGL by checking for a current context.
  *  - Uses GLAD2 non-MX entrypoints (gladLoadGL / gladLoadGLES2) via a universal resolver.
- *  - Resolves symbols using the following order:
+ *  - Resolves symbols using the following order (GL/GLES):
  *      1) User resolver callback (if any)
  *      2) Global symbol table (RTLD_DEFAULT / main module)
  *      3) eglGetProcAddress / glXGetProcAddress* / wglGetProcAddress (when available)
  *      4) Symbols from opened libEGL / libGL / opengl32
+ *  - Resolves symbols using the following order (Emscripten):
+ *      1) User resolver callback (if any)
+ *      2) emscripten_webgl_get_proc_address()
  */
 class GLResolver
 {
@@ -88,6 +96,8 @@ public:
 
     /**
      * @brief Initializes the resolver.
+     * This method has to be called at least once for each resolver instance before it is used.
+     * May be called multiple times, initialization is done if needed only.
      *
      * @param resolver Optional user resolver callback.
      * @param userData Optional user pointer passed to resolver.

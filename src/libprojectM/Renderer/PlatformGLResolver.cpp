@@ -13,6 +13,10 @@
 #include <array>
 #include <cstdio>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/html5.h>
+#endif
+
 namespace libprojectM {
 
 namespace Renderer {
@@ -45,17 +49,15 @@ void GLResolver::SetBackendDefault()
 {
     if (m_backend == Backend::None)
     {
-#ifdef USE_GLES
+#ifdef __EMSCRIPTEN__
+        m_backend = Backend::WebGL;
+#elif defined(USE_GLES)
         m_backend = Backend::EglGles;
-#else
-
-#ifdef _WIN32
+#elif defined(_WIN32)
         m_backend = Backend::WglGl;
-#else // _WIN32
+#else
         m_backend = Backend::GlxGl;
-#endif // _WIN32
-
-#endif // USE_GLES
+#endif
     }
 }
 
@@ -75,8 +77,10 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
     {
         // need to find source for gl functions
         // open libs and detect backend
+#ifndef __EMSCRIPTEN__
         OpenNativeLibraries();
         ResolveProviderFunctions();
+#endif
         DetectBackend();
     }
     else
@@ -210,6 +214,9 @@ void GLResolver::DetectBackend()
     // Detect current context provider
     // This is best-effort: on some platforms (e.g. macOS/CGL) it may report "unknown"
 
+#ifdef __EMSCRIPTEN__
+    m_backend = Backend::WebGL;
+#else
     const bool usingEgl = m_eglLib.IsOpen() && IsCurrentEgl(m_eglLib);
 
 #ifndef _WIN32
@@ -243,6 +250,8 @@ void GLResolver::DetectBackend()
 
     LOG_DEBUG("[GLResolver] Current context: (unknown, will try generic loader)");
     m_backend = Backend::None;
+#endif // #ifdef __EMSCRIPTEN__
+
 }
 
 auto GLResolver::GladResolverThunk(const char* name) -> GLapiproc
@@ -308,6 +317,17 @@ auto GLResolver::Resolve(const char* name) const -> GLapiproc
         }
     }
 
+#ifdef __EMSCRIPTEN__
+    // 2) Emscripten
+    if (void* ptr = emscripten_webgl_get_proc_address(name))
+    {
+        return ptr;
+    }
+    if (void* ptr = emscripten_webgl2_get_proc_address(name))
+    {
+        return ptr;
+    }
+#else
     // 2) Global symbol table
     if (void* ptr = DynamicLibrary::FindGlobalSymbol(name))
     {
@@ -352,6 +372,7 @@ auto GLResolver::Resolve(const char* name) const -> GLapiproc
             return ptr;
         }
     }
+#endif
 
     return nullptr;
 }
