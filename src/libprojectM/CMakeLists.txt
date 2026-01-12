@@ -15,12 +15,6 @@ add_subdirectory(MilkdropPreset)
 add_subdirectory(Renderer)
 add_subdirectory(UserSprites)
 
-set(PROJECTM_LINK_GL_LIBS "")
-if (WIN32)
-    # windows libs need to link to opengl32.dll
-    set(PROJECTM_LINK_GL_LIBS "${PROJECTM_OPENGL_LIBRARIES}")
-endif()
-
 add_library(projectM_main OBJECT
         "${PROJECTM_EXPORT_HEADER}"
         Logging.cpp
@@ -88,9 +82,10 @@ target_include_directories(projectM
         "$<INSTALL_INTERFACE:${PROJECTM_INCLUDE_DIR}>"
         )
 
+# PROJECTM_OPENGL_LIBRARIES is present for WIN32 only
 target_link_libraries(projectM
         PUBLIC
-        ${PROJECTM_LINK_GL_LIBS}
+        ${PROJECTM_OPENGL_LIBRARIES}
         libprojectM::API
         ${PROJECTM_FILESYSTEM_LIBRARY}
         )

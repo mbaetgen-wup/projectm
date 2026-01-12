@@ -5,12 +5,6 @@
 extern "C" {
 #endif
 
-#if defined(SOIL_GLES2) || defined(__ANDROID__) || defined(__EMSCRIPTEN__)
-#include <glad/gles2.h>
-#else
-#include <glad/gl.h>
-#endif
-
     /**
      * Function used by SOIL2 to resolve GL function pointers.
      */

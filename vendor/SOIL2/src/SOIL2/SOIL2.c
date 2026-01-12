@@ -21,6 +21,12 @@
 // --- projectM patched GL discovery start ---
 #include "SOIL2_gl_bridge.h"
 
+#if defined(SOIL_GLES2) || defined(__ANDROID__) || defined(__EMSCRIPTEN__)
+#include <glad/gles2.h>
+#else
+#include <glad/gl.h>
+#endif
+
 #ifndef APIENTRY
 # if defined(_WIN32)
 #   define APIENTRY __stdcall
