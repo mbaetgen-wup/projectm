@@ -63,6 +63,7 @@ extern "C" {
 
 	unsigned long SOIL_version();
 	void SOIL_GL_Init();
+	void SOIL_GL_Destroy();
 
 /**
 	The format of images that may be loaded (force_channels).

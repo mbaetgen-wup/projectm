@@ -336,40 +336,54 @@ typedef void (APIENTRY * P_SOIL_GLGENERATEMIPMAPPROC)(GLenum target);
 static P_SOIL_GLGENERATEMIPMAPPROC soilGlGenerateMipmap = NULL;
 
 
-static int soil2_gl_inited = 0;
-
-
+static int soil2GlInitialized = 0;
 
 void SOIL_GL_Init()
 {
     /* Must be called after a GL context exists and AFTER SOIL_GL_SetResolver(). */
-    if (soil2_gl_inited)
+    if (soil2GlInitialized)
         return;
 
     /* Resolve compressed upload */
     soilGlCompressedTexImage2D =
         (P_SOIL_GLCOMPRESSEDTEXIMAGE2DPROC)SOIL_GL_GetProcAddress("glCompressedTexImage2D");
     if (!soilGlCompressedTexImage2D)
+    {
         soilGlCompressedTexImage2D =
             (P_SOIL_GLCOMPRESSEDTEXIMAGE2DPROC)SOIL_GL_GetProcAddress("glCompressedTexImage2DARB");
+    }
 
     /* Resolve mipmap generator (desktop + ES extensions) */
     soilGlGenerateMipmap =
         (P_SOIL_GLGENERATEMIPMAPPROC)SOIL_GL_GetProcAddress("glGenerateMipmap");
     if (!soilGlGenerateMipmap)
+    {
         soilGlGenerateMipmap =
             (P_SOIL_GLGENERATEMIPMAPPROC)SOIL_GL_GetProcAddress("glGenerateMipmapEXT");
+    }
     if (!soilGlGenerateMipmap)
+    {
         soilGlGenerateMipmap =
             (P_SOIL_GLGENERATEMIPMAPPROC)SOIL_GL_GetProcAddress("glGenerateMipmapOES");
+    }
 
-    soil2_gl_inited = 1;
+    soil2GlInitialized = 1;
 }
 
-/* Ensure OpenGL function pointers are initialized (safe to call repeatedly). */
-static void soil2_ensure_gl_inited(void)
+void SOIL_GL_Destroy()
 {
-	if(!soil2_gl_inited)
+    soil2GlInitialized = 0;
+    soilGlCompressedTexImage2D = NULL;
+    soilGlGenerateMipmap = NULL;
+    soilGlGenerateMipmap = NULL;
+    soilGlGenerateMipmap = NULL;
+}
+
+
+/* Ensure OpenGL function pointers are initialized (safe to call repeatedly). */
+static void soil2_ensure_gl_initialized(void)
+{
+	if(!soil2GlInitialized)
 	{
 		SOIL_GL_Init();
 	}
@@ -3171,7 +3185,7 @@ static P_SOIL_GLCOMPRESSEDTEXIMAGE2DPROC get_glCompressedTexImage2D_addr()
 {
     /* Always go through the user-provided resolver to avoid link-time symbol collisions
        (e.g. when GLAD or other loaders are compiled into the binary). */
-    soil2_ensure_gl_inited();
+    soil2_ensure_gl_initialized();
     return soilGlCompressedTexImage2D;
 }
 
@@ -3368,7 +3382,7 @@ int query_gen_mipmap_capability( void )
         }
         else
         {
-            soil2_ensure_gl_inited();
+            soil2_ensure_gl_initialized();
 
             if (soilGlGenerateMipmap)
             {

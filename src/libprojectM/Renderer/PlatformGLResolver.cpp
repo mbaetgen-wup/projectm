@@ -25,6 +25,8 @@ namespace Platform {
 
 GLResolver::~GLResolver()
 {
+    SOIL_GL_Destroy();
+
     // make sure handles are released
     m_eglLib.Close();
     m_glLib.Close();
@@ -110,6 +112,8 @@ void GLResolver::Shutdown()
 {
     const std::lock_guard<std::mutex> lock(m_mutex);
 
+    SOIL_GL_Destroy();
+
     m_loaded = false;
     m_backend = Backend::None;
 
@@ -145,7 +149,7 @@ auto GLResolver::GetProcAddress(const char* name) const -> GLapiproc
 
 void GLResolver::OpenNativeLibraries()
 {
-    // Best-effort: macOS or minimal EGL setups may fail to open
+    // Best-effort: mac or minimal EGL setups may fail to open
 
 #ifdef _WIN32
     static constexpr std::array<const char*, 3> kEglNames = {"libEGL.dll", "EGL.dll", nullptr};

@@ -39,9 +39,9 @@ enum class Backend : std::uint8_t
     WglGl = 3,
 
     /**
-     * WegGL proc resolver (Emscripten only).
+     * WegGl proc resolver (Emscripten only).
      */
-    WebGL = 4,
+    WebGl = 4,
 
     /**
      * User resolver is used, no backend detection.
@@ -61,6 +61,8 @@ using UserResolver = void* (*)(const char* name, void* userData);
  * @brief Cross-platform runtime GL/GLES resolver.
  *
  * This resolver:
+ *  - Supports: EGL, GLES, GLX, WGL, WebGL or a user supplied resolver.
+ *  - Platforms: Android, Emscripten, Linux, Mac, Windows.
  *  - Must be initialized after a GL/GLES context has been created and made current.
  *  - Probes for EGL/GLX/WGL by checking for a current context.
  *  - Uses GLAD2 non-MX entrypoints (gladLoadGL / gladLoadGLES2) via a universal resolver.
