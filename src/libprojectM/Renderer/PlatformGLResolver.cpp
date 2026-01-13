@@ -44,7 +44,7 @@ void GLResolver::SetBackendDefault()
     if (m_backend == Backend::None)
     {
 #ifdef __EMSCRIPTEN__
-        m_backend = Backend::WebGL;
+        m_backend = Backend::WebGl;
 #elif defined(USE_GLES)
         m_backend = Backend::EglGles;
 #elif defined(_WIN32)
@@ -277,7 +277,7 @@ void GLResolver::DetectBackend()
     // This is best-effort: on some platforms (e.g. macOS/CGL) it may report "unknown"
 
 #ifdef __EMSCRIPTEN__
-    m_backend = Backend::WebGL;
+    m_backend = Backend::WebGl;
 #else
     const bool usingEgl = m_eglLib.IsOpen() && IsCurrentEgl(m_eglLib);
 
