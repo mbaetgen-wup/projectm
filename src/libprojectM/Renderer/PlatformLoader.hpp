@@ -45,6 +45,7 @@ public:
     inline bool IsOpen() const { return false; }
 
     inline void* GetSymbol(const char*) const { return nullptr; }
+    inline void* Handle() const { return nullptr; }
     static inline void* FindGlobalSymbol(const char*) { return nullptr; }
 };
 
