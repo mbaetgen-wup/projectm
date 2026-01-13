@@ -165,17 +165,6 @@ else()
 
     if(ENABLE_GLES)
         message(STATUS "Building for OpenGL Embedded Profile")
-
-        # We use a local find script for OpenGL::GLES3 until the proposed changes are merged upstream.
-        if(WIN32)
-            list(APPEND CMAKE_MODULE_PATH "${PROJECTM_SOURCE_DIR}/cmake/gles")
-            find_package(OpenGL REQUIRED COMPONENTS GLES3)
-            if(NOT TARGET OpenGL::GLES3)
-                message(FATAL_ERROR "No suitable GLES3 library was found.")
-            endif()
-
-            set(PROJECTM_OPENGL_LIBRARIES OpenGL::GLES3)
-        endif()
         set(USE_GLES ON)
     else()
         message(STATUS "Building for OpenGL Core Profile")

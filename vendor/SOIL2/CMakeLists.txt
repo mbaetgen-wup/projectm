@@ -1,3 +1,6 @@
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+
 add_library(SOIL2 OBJECT
         ${CMAKE_CURRENT_SOURCE_DIR}/src/common/common.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/common/common.hpp
