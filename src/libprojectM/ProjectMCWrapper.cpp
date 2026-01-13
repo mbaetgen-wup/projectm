@@ -15,10 +15,6 @@
 
 namespace libprojectM {
 
-projectMWrapper::projectMWrapper(const std::shared_ptr<Renderer::Platform::GLResolver>& glResolver)
-    : ProjectM(glResolver)
-{
-}
 
 void projectMWrapper::PresetSwitchRequestedEvent(bool isHardCut) const
 {
@@ -82,17 +78,18 @@ projectm_handle projectm_create_with_opengl_load_proc(void* (*load_proc)(const c
     try
     {
         // obtain shared resolver instance
-        auto glResolver = libprojectM::Renderer::Platform::GLResolver::Instance();
+        auto& glResolver = libprojectM::Renderer::Platform::GLResolver::Instance();
+
         // init resolver to discover gl function pointers and init GLAD
         // Initialize() is guarded internally, may be called multiple times
-        auto success = glResolver->Initialize(load_proc, user_data);
+        auto success = glResolver.Initialize(load_proc, user_data);
         if (!success)
         {
             return nullptr;
         }
 
         // create projectM
-        auto* projectMInstance = new libprojectM::projectMWrapper(glResolver);
+        auto* projectMInstance = new libprojectM::projectMWrapper();
         return reinterpret_cast<projectm_handle>(projectMInstance);
     }
     catch (...)

@@ -34,7 +34,7 @@ add_library(Renderer OBJECT
         OpenGL.h
         PlatformGLResolver.cpp
         PlatformGLResolver.hpp
-        PlatformLoader.h
+        PlatformLoader.hpp
         Point.hpp
         PresetTransition.cpp
         PresetTransition.hpp

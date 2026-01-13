@@ -1,7 +1,8 @@
 #pragma once
 
-#include "PlatformLoader.h"
+#include "PlatformLoader.hpp"
 
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -68,8 +69,8 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *  - Uses GLAD2 non-MX entrypoints (gladLoadGL / gladLoadGLES2) via a universal resolver.
  *  - Resolves symbols using the following order (GL/GLES):
  *      1) User resolver callback (if any)
- *      2) Global symbol table (RTLD_DEFAULT / main module)
- *      3) eglGetProcAddress / glXGetProcAddress* / wglGetProcAddress (when available)
+ *      2) Platform provider eglGetProcAddress / glXGetProcAddress* / wglGetProcAddress (when available)
+ *      3) Global symbol table (RTLD_DEFAULT / main module)
  *      4) Symbols from opened libEGL / libGL / opengl32
  *  - Resolves symbols using the following order (Emscripten):
  *      1) User resolver callback (if any)
@@ -94,7 +95,7 @@ public:
     /**
      * @brief Returns the process-wide resolver instance.
      */
-    static auto Instance() -> std::shared_ptr<GLResolver>;
+    static auto Instance() -> GLResolver&;
 
     /**
      * @brief Initializes the resolver.
@@ -152,6 +153,8 @@ private:
 
     mutable std::mutex m_mutex;                   //!< Mutex to synchronize initialization and access.
     bool m_loaded{false};                         //!< True if the resolver is initialized.
+    bool m_initializing{false};                   //!< True while an Initialize() attempt is in-flight.
+    mutable std::condition_variable m_initCv;     //!< Signals completion of Initialize()/Shutdown().
     Backend m_backend{ Backend::None };           //!< Detected GL backend.
 
     UserResolver m_userResolver{nullptr};         //!< User provided function resolver. Optional, may be null.
@@ -159,6 +162,7 @@ private:
 
     DynamicLibrary m_eglLib;                      //!< EGL library handle. Optional, may be null.
     DynamicLibrary m_glLib;                       //!< GL library handle. Optional, may be null.
+    DynamicLibrary m_glxLib;                      //!< GLX library handle. Optional, may be null.
 
     GetProcFunc m_eglGetProcAddress{nullptr};     //!< Function pointer to EGL proc resolver function.
     GetProcFunc m_glxGetProcAddress{nullptr};     //!< Function pointer to GLX proc resolver function.

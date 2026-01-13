@@ -2,10 +2,12 @@
 
 #include <cstddef>
 
+#ifndef __EMSCRIPTEN__
 #ifdef _WIN32
     #include <windows.h>
 #else
     #include <dlfcn.h>
+#endif
 #endif
 
 namespace libprojectM
@@ -23,6 +25,38 @@ using LibHandle = HMODULE;
 #else
 using LibHandle = void*;
 #endif
+
+#ifdef __EMSCRIPTEN__
+
+// -------------------------------------------------------------------------
+// Emscripten stub implementation
+// -------------------------------------------------------------------------
+class DynamicLibrary
+{
+public:
+    DynamicLibrary() = default;
+    ~DynamicLibrary() = default;
+
+    DynamicLibrary(const DynamicLibrary&) = delete;
+    DynamicLibrary& operator=(const DynamicLibrary&) = delete;
+
+    inline bool Open(const char* const*) { return false; }
+    inline void Close() {}
+    inline bool IsOpen() const { return false; }
+
+    inline void* GetSymbol(const char*) const { return nullptr; }
+    static inline void* FindGlobalSymbol(const char*) { return nullptr; }
+};
+
+inline auto IsCurrentEgl(const DynamicLibrary&) -> bool { return false; }
+#ifndef _WIN32
+inline auto IsCurrentGlx(const DynamicLibrary&) -> bool { return false; }
+#endif
+
+#else // #ifdef __EMSCRIPTEN__
+// -------------------------------------------------------------------------
+// Native implementation (Windows / POSIX)
+// -------------------------------------------------------------------------
 
 /**
  * @brief RAII wrapper around a dynamic library handle.
@@ -271,6 +305,8 @@ inline auto IsCurrentWgl() -> bool
 }
 
 #endif
+
+#endif // #ifdef __EMSCRIPTEN__
 
 } // namespace Platform
 } // namespace Renderer

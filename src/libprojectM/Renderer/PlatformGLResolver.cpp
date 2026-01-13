@@ -30,20 +30,12 @@ GLResolver::~GLResolver()
     // make sure handles are released
     m_eglLib.Close();
     m_glLib.Close();
+    m_glxLib.Close();
 }
 
-auto GLResolver::Instance() -> std::shared_ptr<GLResolver>
+auto GLResolver::Instance() -> GLResolver&
 {
-    // observe resolver instance with a weak pointer
-    // so that it is shared, but released once the last
-    // client shared_ptr is released
-    static std::weak_ptr<GLResolver> sharedInstance;
-    auto instance = sharedInstance.lock();
-    if (instance == nullptr)
-    {
-        instance = std::make_shared<GLResolver>();
-        sharedInstance = instance;
-    }
+    static GLResolver instance;
     return instance;
 }
 
@@ -65,12 +57,26 @@ void GLResolver::SetBackendDefault()
 
 auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
 {
-    const std::lock_guard<std::mutex> lock(m_mutex);
+    // Avoids holding m_mutex while calling into GLAD (prevents deadlocks),
+    // Prevent concurrent Initialize()/Shutdown(),
+    std::unique_lock<std::mutex> lock(m_mutex);
 
     if (m_loaded)
     {
         return true;
     }
+
+    while (m_initializing)
+    {
+        m_initCv.wait(lock);
+    }
+
+    if (m_loaded)
+    {
+        return true;
+    }
+
+    m_initializing = true;
 
     m_userResolver = resolver;
     m_userData = userData;
@@ -93,24 +99,44 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
         m_backend = Backend::UserResolver;
     }
 
-    if (LoadGlad())
+    // Do not hold m_mutex while calling into GLAD.
+    lock.unlock();
+
+    const bool loaded = LoadGlad();
+
+    lock.lock();
+
+    if (loaded)
     {
         // set default in case detection failed, but loading succeeded
         SetBackendDefault();
+
+        lock.unlock();
 
         // init SOIL2 gl functions
         SOIL_GL_SetResolver(&GLResolver::GladResolverThunk);
         SOIL_GL_Init();
 
+        lock.lock();
+
         m_loaded = true;
     }
+
+    m_initializing = false;
+    m_initCv.notify_all();
+    lock.unlock();
 
     return m_loaded;
 }
 
 void GLResolver::Shutdown()
 {
-    const std::lock_guard<std::mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
+
+    while (m_initializing)
+    {
+        m_initCv.wait(lock);
+    }
 
     SOIL_GL_Destroy();
 
@@ -126,6 +152,7 @@ void GLResolver::Shutdown()
 
     m_eglLib.Close();
     m_glLib.Close();
+    m_glxLib.Close();
 }
 
 auto GLResolver::IsLoaded() const -> bool
@@ -142,8 +169,7 @@ auto GLResolver::CurrentBackend() const -> Backend
 
 auto GLResolver::GetProcAddress(const char* name) const -> GLapiproc
 {
-    // NOTE: This method is used during GLAD loading. Avoid taking the mutex here to
-    // prevent deadlocks if GLAD calls back into us while Initialize() is holding the lock
+    std::lock_guard<std::mutex> lock(m_mutex);
     return Resolve(name);
 }
 
@@ -153,13 +179,35 @@ void GLResolver::OpenNativeLibraries()
 
 #ifdef _WIN32
     static constexpr std::array<const char*, 3> kEglNames = {"libEGL.dll", "EGL.dll", nullptr};
-    static constexpr std::array<const char*, 2> kGlNames = {"opengl32.dll", nullptr};
+    static constexpr std::array<const char*, 4> kGlNames = {"opengl32.dll", "libGLESv2.dll", "libGLESv3.dll", nullptr};
 #elif defined(__APPLE__)
     static constexpr std::array<const char*, 2> kEglNames = {"libEGL.dylib", nullptr};
     static constexpr std::array<const char*, 2> kGlNames = {"/System/Library/Frameworks/OpenGL.framework/OpenGL", nullptr};
+#elif defined(__ANDROID__)
+    // Android uses EGL + GLES (no desktop libGL / GLX)
+    static constexpr std::array<const char*, 2> kEglNames = {"libEGL.so", nullptr};
+    static constexpr std::array<const char*, 3> kGlNames = {
+        "libGLESv3.so",
+        "libGLESv2.so",
+        nullptr
+    };
 #else
     static constexpr std::array<const char*, 3> kEglNames = {"libEGL.so.1", "libEGL.so", nullptr};
-    static constexpr std::array<const char*, 3> kGlNames = {"libGL.so.1", "libGL.so", nullptr};
+    static constexpr std::array<const char*, 4> kGlNames = {
+        "libGL.so.1",       // legacy/compat umbrella (often provided by GLVND)
+        "libOpenGL.so.0",   // GLVND OpenGL dispatcher (core gl* entry points)
+        "libGL.so",
+        nullptr
+    };
+
+    // Linux / GLVND note:
+    // Some environments (especially minimal/container) may not ship libGL.so.1 but do ship GLVND libs.
+    // Keep legacy libGL first for backwards compatibility, but fall back to GLVND-facing libs if needed.
+    static constexpr std::array<const char*, 2> kGlxNames = {
+        "libGLX.so.0",      // GLVND GLX dispatcher (glXGetProcAddress*)
+        nullptr
+    };
+    m_glxLib.Open(kGlxNames.data());
 #endif
 
     m_eglLib.Open(kEglNames.data());
@@ -180,9 +228,9 @@ void GLResolver::ResolveProviderFunctions()
     }
 
     // GLX / WGL
+#ifdef _WIN32
     if (m_glLib.IsOpen())
     {
-#ifdef _WIN32
         void* sym = m_glLib.GetSymbol("wglGetProcAddress");
         if (!sym)
         {
@@ -190,14 +238,23 @@ void GLResolver::ResolveProviderFunctions()
         }
         m_wglGetProcAddress = reinterpret_cast<GetProcFunc>(sym);
 #else
-        void* sym = m_glLib.GetSymbol("glXGetProcAddressARB");
+    if (m_glxLib.IsOpen())
+    {
+        // Try libs first
+        void* sym = m_glxLib.GetSymbol("glXGetProcAddressARB");
         if (sym == nullptr)
         {
-            sym = m_glLib.GetSymbol("glXGetProcAddress");
+            sym = m_glxLib.GetSymbol("glXGetProcAddress");
         }
         if (sym == nullptr)
         {
-            sym = DynamicLibrary::FindGlobalSymbol("glXGetProcAddress");
+            // Try both names via global lookup as well. Depending on which GL/GLX libs
+            // are already present in the process, only one may be exported.
+            sym = DynamicLibrary::FindGlobalSymbol("glXGetProcAddressARB");
+            if (sym == nullptr)
+            {
+                sym = DynamicLibrary::FindGlobalSymbol("glXGetProcAddress");
+            }
         }
         m_glxGetProcAddress = reinterpret_cast<GetProcFunc>(sym);
 #endif
@@ -205,9 +262,10 @@ void GLResolver::ResolveProviderFunctions()
 
     {
         std::array<char, 256> buf{};
-        std::snprintf(buf.data(), buf.size(), "[GLResolver] Library handles: egl=%p gl=%p",
+        std::snprintf(buf.data(), buf.size(), "[GLResolver] Library handles: egl=%p gl=%p glx=%p",
             reinterpret_cast<void*>(m_eglLib.Handle()),
-            reinterpret_cast<void*>(m_glLib.Handle()));
+            reinterpret_cast<void*>(m_glLib.Handle()),
+            reinterpret_cast<void*>(m_glxLib.Handle()));
         LOG_DEBUG(std::string(buf.data()));
     }
 
@@ -224,7 +282,10 @@ void GLResolver::DetectBackend()
     const bool usingEgl = m_eglLib.IsOpen() && IsCurrentEgl(m_eglLib);
 
 #ifndef _WIN32
-    const bool usingGlx = m_glLib.IsOpen() && IsCurrentGlx(m_glLib);
+    // Prefer GLX detection via libGLX when available (GLVND setups may load libOpenGL without GLX symbols).
+    const bool usingGlx =
+        (m_glxLib.IsOpen() && IsCurrentGlx(m_glxLib)) ||
+        (m_glLib.IsOpen() && IsCurrentGlx(m_glLib));
 #else
     const bool usingWgl = IsCurrentWgl();
 #endif
@@ -260,7 +321,7 @@ void GLResolver::DetectBackend()
 
 auto GLResolver::GladResolverThunk(const char* name) -> GLapiproc
 {
-    return Instance()->Resolve(name);
+    return Instance().Resolve(name);
 }
 
 namespace {
@@ -332,33 +393,34 @@ auto GLResolver::Resolve(const char* name) const -> GLapiproc
         return ptr;
     }
 #else
-    // 2) Global symbol table
-    if (void* ptr = DynamicLibrary::FindGlobalSymbol(name))
-    {
-        return ptr;
-    }
 
-    // 3) Platform provider getProcAddress
-    if (m_eglGetProcAddress != nullptr)
+    // 2) Platform provider getProcAddress (prefer for correctness, extensions, GLVND dispatch)
+    if ((m_backend == Backend::EglGles || m_backend == Backend::None) && m_eglGetProcAddress != nullptr)
     {
         if (void* ptr = m_eglGetProcAddress(name))
         {
             return ptr;
         }
     }
-    if (m_glxGetProcAddress != nullptr)
+    if ((m_backend == Backend::GlxGl || m_backend == Backend::None) && m_glxGetProcAddress != nullptr)
     {
         if (void* ptr = m_glxGetProcAddress(name))
         {
             return ptr;
         }
     }
-    if (m_wglGetProcAddress != nullptr)
+    if ((m_backend == Backend::WglGl || m_backend == Backend::None) && m_wglGetProcAddress != nullptr)
     {
         if (void* ptr = m_wglGetProcAddress(name))
         {
             return ptr;
         }
+    }
+
+    // 3) Global symbol table (works if the process already linked/loaded GL libs)
+    if (void* ptr = DynamicLibrary::FindGlobalSymbol(name))
+    {
+        return ptr;
     }
 
     // 4) Direct library symbol lookup
@@ -372,6 +434,13 @@ auto GLResolver::Resolve(const char* name) const -> GLapiproc
     if (m_glLib.IsOpen())
     {
         if (void* ptr = m_glLib.GetSymbol(name))
+        {
+            return ptr;
+        }
+    }
+    if (m_glxLib.IsOpen())
+    {
+        if (void* ptr = m_glxLib.GetSymbol(name))
         {
             return ptr;
         }

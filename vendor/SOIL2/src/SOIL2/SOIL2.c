@@ -207,7 +207,6 @@ static void soil2_init_stringi(void)
 
 #if defined( SOIL_X11_PLATFORM ) || defined( SOIL_PLATFORM_WIN32 ) || defined( SOIL_PLATFORM_OSX ) || defined(__HAIKU__)
 typedef const GLubyte *(APIENTRY * P_SOIL_glGetStringiFunc) (GLenum, GLuint);
-static P_SOIL_glGetStringiFunc soilGlGetStringiFunc = NULL;
 
 // --- projectM patched GL discovery start ---
 
@@ -375,8 +374,7 @@ void SOIL_GL_Destroy()
     soil2GlInitialized = 0;
     soilGlCompressedTexImage2D = NULL;
     soilGlGenerateMipmap = NULL;
-    soilGlGenerateMipmap = NULL;
-    soilGlGenerateMipmap = NULL;
+    soilGlGetStringi = NULL;
 }
 
 

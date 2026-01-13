@@ -39,9 +39,7 @@ extern "C" {
  * current or insufficient to render projectM visuals.
  *
  * Note: The OpenGL resolver is initialized on the first call to either projectm_create() or projectm_create_with_opengl_load_proc().
- * All projectM instances share the same resolver, and subsequent calls ignore the provided load_proc.
- * The resolver instance is tied to the lifecycle of the created projectM instances.
- * It is released when the last projectM instance is released, and can be reinitialized.
+ * All projectM instances share the same resolver.
  *
  * @return A projectM handle for the newly created instance that must be used in subsequent API calls.
  *         NULL if the instance could not be created successfully.
@@ -58,8 +56,6 @@ PROJECTM_EXPORT projectm_handle projectm_create();
  *
  * Note: The OpenGL resolver is initialized on the first call to either projectm_create() or projectm_create_with_opengl_load_proc().
  * All projectM instances share the same resolver, and subsequent calls ignore the provided load_proc.
- * The resolver instance is tied to the lifecycle of the created projectM instances.
- * It is released when the last projectM instance is released, and can be reinitialized.
  *
  * @return A projectM handle for the newly created instance that must be used in subsequent API calls.
  *         NULL if the instance could not be created successfully.
