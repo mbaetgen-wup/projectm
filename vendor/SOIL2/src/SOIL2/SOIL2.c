@@ -105,6 +105,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+
+/* thread-safe init/caches when C11 atomics are available. */
+#if !defined(__STDC_NO_ATOMICS__)
+#define SOIL2_HAVE_C11_ATOMICS 1
+#include <stdatomic.h>
+#else
+#define SOIL2_HAVE_C11_ATOMICS 0
+#endif
 // --- projectM patched GL discovery start ---
 
 #if defined(_WIN32) || defined(SOIL_PLATFORM_WIN32)
@@ -206,43 +214,57 @@ static void soil2_init_stringi(void)
 // --- projectM patched GL discovery end ---
 
 #if defined( SOIL_X11_PLATFORM ) || defined( SOIL_PLATFORM_WIN32 ) || defined( SOIL_PLATFORM_OSX ) || defined(__HAIKU__)
-typedef const GLubyte *(APIENTRY * P_SOIL_glGetStringiFunc) (GLenum, GLuint);
 
 // --- projectM patched GL discovery start ---
 
 static int isAtLeastGL3()
 {
+    /* Cache result. If atomics are available, this is thread-safe. */
+#if SOIL2_HAVE_C11_ATOMICS
+    static atomic_int cached = ATOMIC_VAR_INIT(SOIL_CAPABILITY_UNKNOWN);
+    int cached_val = atomic_load_explicit(&cached, memory_order_acquire);
+    if (cached_val != SOIL_CAPABILITY_UNKNOWN)
+        return cached_val;
+#else
     static int cached = SOIL_CAPABILITY_UNKNOWN;
-    if (cached != SOIL_CAPABILITY_UNKNOWN) return cached;
+    if (cached != SOIL_CAPABILITY_UNKNOWN)
+        return cached;
+#endif
 
     const char* verstr = (const char*)glGetString(GL_VERSION);
-    if (!verstr) {
+    if (!verstr)
+    {
+#if SOIL2_HAVE_C11_ATOMICS
+        atomic_store_explicit(&cached, SOIL_CAPABILITY_NONE, memory_order_release);
+        return SOIL_CAPABILITY_NONE;
+#else
         cached = SOIL_CAPABILITY_NONE;
         return cached;
+#endif
     }
 
-    // Desktop examples:
-    //   "3.3.0 NVIDIA 555.xx"
-    // GLES examples:
-    //   "OpenGL ES 3.2 Mesa ..."
-    //   "OpenGL ES-CM 1.1 ..." (old)
     const int is_es = (strstr(verstr, "OpenGL ES") != NULL) || (strstr(verstr, " ES ") != NULL);
 
+    int result = SOIL_CAPABILITY_NONE;
     int maj = 0, min = 0;
-    if (is_es) {
-        // Best-effort: parse the first X.Y in the string
+    if (is_es)
+    {
         if (sscanf(verstr, "%*[^0-9]%d.%d", &maj, &min) == 2 && maj >= 3)
-            cached = SOIL_CAPABILITY_PRESENT;
-        else
-            cached = SOIL_CAPABILITY_NONE;
-    } else {
+            result = SOIL_CAPABILITY_PRESENT;
+    }
+    else
+    {
         if (sscanf(verstr, "%d.%d", &maj, &min) == 2 && maj >= 3)
-            cached = SOIL_CAPABILITY_PRESENT;
-        else
-            cached = SOIL_CAPABILITY_NONE;
+            result = SOIL_CAPABILITY_PRESENT;
     }
 
+#if SOIL2_HAVE_C11_ATOMICS
+    atomic_store_explicit(&cached, result, memory_order_release);
+    return result;
+#else
+    cached = result;
     return cached;
+#endif
 }
 // --- projectM patched GL discovery end ---
 
@@ -335,13 +357,35 @@ typedef void (APIENTRY * P_SOIL_GLGENERATEMIPMAPPROC)(GLenum target);
 static P_SOIL_GLGENERATEMIPMAPPROC soilGlGenerateMipmap = NULL;
 
 
+#if SOIL2_HAVE_C11_ATOMICS
+/* 0=uninitialized, 1=initializing, 2=initialized */
+static atomic_int soil2GlInitState = ATOMIC_VAR_INIT(0);
+#else
 static int soil2GlInitialized = 0;
+#endif
 
 void SOIL_GL_Init()
 {
     /* Must be called after a GL context exists and AFTER SOIL_GL_SetResolver(). */
+#if SOIL2_HAVE_C11_ATOMICS
+    int state = atomic_load_explicit(&soil2GlInitState, memory_order_acquire);
+    if (state == 2)
+        return;
+
+    int expected = 0;
+    if (!atomic_compare_exchange_strong_explicit(&soil2GlInitState, &expected, 1,
+                                                 memory_order_acq_rel, memory_order_acquire))
+    {
+        while ((state = atomic_load_explicit(&soil2GlInitState, memory_order_acquire)) == 1)
+        {
+            /* spin */
+        }
+        return;
+    }
+#else
     if (soil2GlInitialized)
         return;
+#endif
 
     /* Resolve compressed upload */
     soilGlCompressedTexImage2D =
@@ -366,12 +410,20 @@ void SOIL_GL_Init()
             (P_SOIL_GLGENERATEMIPMAPPROC)SOIL_GL_GetProcAddress("glGenerateMipmapOES");
     }
 
+#if SOIL2_HAVE_C11_ATOMICS
+    atomic_store_explicit(&soil2GlInitState, 2, memory_order_release);
+#else
     soil2GlInitialized = 1;
+#endif
 }
 
 void SOIL_GL_Destroy()
 {
+#if SOIL2_HAVE_C11_ATOMICS
+    atomic_store_explicit(&soil2GlInitState, 0, memory_order_release);
+#else
     soil2GlInitialized = 0;
+#endif
     soilGlCompressedTexImage2D = NULL;
     soilGlGenerateMipmap = NULL;
     soilGlGetStringi = NULL;
@@ -381,10 +433,17 @@ void SOIL_GL_Destroy()
 /* Ensure OpenGL function pointers are initialized (safe to call repeatedly). */
 static void soil2_ensure_gl_initialized(void)
 {
-	if(!soil2GlInitialized)
-	{
-		SOIL_GL_Init();
-	}
+#if SOIL2_HAVE_C11_ATOMICS
+    if (atomic_load_explicit(&soil2GlInitState, memory_order_acquire) != 2)
+    {
+        SOIL_GL_Init();
+    }
+#else
+    if (!soil2GlInitialized)
+    {
+        SOIL_GL_Init();
+    }
+#endif
 }
 
 // --- projectM patched GL discovery end ---
