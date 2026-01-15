@@ -267,9 +267,11 @@ void GLResolver::OpenNativeLibraries()
     };
 #else
     static constexpr std::array<const char*, 3> kEglNames = {"libEGL.so.1", "libEGL.so", nullptr};
-    static constexpr std::array<const char*, 4> kGlNames = {
+    static constexpr std::array<const char*, 6> kGlNames = {
         "libGL.so.1",       // legacy/compat umbrella (often provided by GLVND)
-        "libOpenGL.so.0",   // GLVND OpenGL dispatcher (core gl* entry points)
+        "libGL.so.0",       // sometimes shipped as .so.0
+        "libOpenGL.so.1",   // GLVND OpenGL dispatcher (core gl* entry points)
+        "libOpenGL.so.0",   // older GLVND soname
         "libGL.so",
         nullptr
     };
@@ -277,8 +279,9 @@ void GLResolver::OpenNativeLibraries()
     // Linux / GLVND note:
     // Some environments (especially minimal/container) may not ship libGL.so.1 but do ship GLVND libs.
     // Keep legacy libGL first for backwards compatibility, but fall back to GLVND-facing libs if needed.
-    static constexpr std::array<const char*, 2> kGlxNames = {
-        "libGLX.so.0",      // GLVND GLX dispatcher (glXGetProcAddress*)
+    static constexpr std::array<const char*, 3> kGlxNames = {
+        "libGLX.so.1",      // GLVND GLX dispatcher (glXGetProcAddress*)
+        "libGLX.so.0",      // older GLVND soname
         nullptr
     };
     const bool glxOpened = m_glxLib.Open(kGlxNames.data());

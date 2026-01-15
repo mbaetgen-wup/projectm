@@ -96,10 +96,6 @@ auto ApiString(GLApi api) -> const char*
 
 auto HasBasicGLEntrypoints(std::string& reason) -> bool
 {
-    /*
-     * With GLAD, GL functions are function pointers. Calling them before
-     * gladLoadGL/gladLoadGLES2 has populated them will crash.
-     */
     if (glGetString == nullptr || glGetError == nullptr)
     {
         reason = "GL entrypoints not loaded (call gladLoadGL/GLES with a current context first)";
