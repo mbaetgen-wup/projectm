@@ -293,11 +293,24 @@ void GLResolver::OpenNativeLibraries()
         "libGLX.so.0",      // GLVND GLX dispatcher (glXGetProcAddress*)
         nullptr
     };
-    m_glxLib.Open(kGlxNames.data());
+    const bool glxOpened = m_glxLib.Open(kGlxNames.data());
+    if (!glxOpened)
+    {
+        LOG_DEBUG(std::string("[GLResolver] Failed to open GLX library: ") + m_glxLib.LastError());
+    }
 #endif
 
-    m_eglLib.Open(kEglNames.data());
-    m_glLib.Open(kGlNames.data());
+    const bool eglOpened = m_eglLib.Open(kEglNames.data());
+    if (eglOpened == false)
+    {
+        LOG_DEBUG(std::string("[GLResolver] Failed to open EGL library: ") + m_eglLib.LastError());
+    }
+
+    const bool glOpened = m_glLib.Open(kGlNames.data());
+    if (glOpened == false)
+    {
+        LOG_DEBUG(std::string("[GLResolver] Failed to open GL library: ") + m_glLib.LastError());
+    }
 }
 
 void GLResolver::ResolveProviderFunctions()

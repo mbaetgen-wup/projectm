@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <string>
 
 #ifndef __EMSCRIPTEN__
 #ifdef _WIN32
@@ -113,6 +114,7 @@ public:
 
         if (names == nullptr)
         {
+            m_lastError = "No library names provided";
             return false;
         }
 
@@ -125,15 +127,63 @@ public:
             }
 
 #ifdef _WIN32
+            ::SetLastError(0);
             m_handle = ::LoadLibraryA(name);
 #else
+            ::dlerror(); // clear any prior error
             m_handle = ::dlopen(name, RTLD_LAZY | RTLD_LOCAL);
 #endif
 
             if (m_handle != nullptr)
             {
+                m_loadedName = name;
+                m_lastError.clear();
                 return true;
             }
+
+#ifdef _WIN32
+            {
+                const DWORD err = ::GetLastError();
+
+                char* msg = nullptr;
+                const DWORD flags = FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS;
+                const DWORD lang = MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT);
+
+                const DWORD len = ::FormatMessageA(flags,
+                                                   nullptr,
+                                                   err,
+                                                   lang,
+                                                   reinterpret_cast<LPSTR>(&msg),
+                                                   0,
+                                                   nullptr);
+
+                m_lastError = "LoadLibraryA failed for ";
+                m_lastError += name;
+                m_lastError += " (";
+                m_lastError += std::to_string(static_cast<unsigned long>(err));
+                m_lastError += "): ";
+                if (len != 0 && msg != nullptr)
+                {
+                    m_lastError += msg;
+                }
+                if (msg != nullptr)
+                {
+                    ::LocalFree(msg);
+                }
+            }
+#else
+            {
+                const char* err = ::dlerror();
+                m_lastError = "dlopen failed for ";
+                m_lastError += name;
+                m_lastError += ": ";
+                if (err != nullptr)
+                {
+                    m_lastError += err;
+
+                }
+            }
+#endif
         }
 
         return false;
@@ -155,6 +205,8 @@ public:
         ::dlclose(m_handle);
 #endif
         m_handle = nullptr;
+        m_loadedName.clear();
+        m_lastError.clear();
     }
 
     /**
@@ -163,6 +215,22 @@ public:
     [[nodiscard]] auto IsOpen() const -> bool
     {
         return m_handle != nullptr;
+    }
+
+    /**
+     * @brief Returns the name of the successfully opened library (empty if none).
+     */
+    [[nodiscard]] auto LoadedName() const -> const std::string&
+    {
+        return m_loadedName;
+    }
+
+    /**
+     * @brief Returns the last error message from Open() (empty if none).
+     */
+    [[nodiscard]] auto LastError() const -> const std::string&
+    {
+        return m_lastError;
     }
 
     /**
@@ -233,6 +301,8 @@ public:
 
 private:
     LibHandle m_handle{};          //!< Library handle used to access the system library.
+    std::string m_loadedName;      //< Successfully opened library name.
+    std::string m_lastError;       //< Last Open() error message.
 };
 
 /**
