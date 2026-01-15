@@ -15,7 +15,6 @@
 
 namespace libprojectM {
 
-
 void projectMWrapper::PresetSwitchRequestedEvent(bool isHardCut) const
 {
     if (m_presetSwitchRequestedEventCallback)

@@ -32,6 +32,8 @@ add_library(Renderer OBJECT
         MilkdropNoise.cpp
         MilkdropNoise.hpp
         OpenGL.h
+        PlatformGLContextCheck.cpp
+        PlatformGLContextCheck.hpp
         PlatformGLResolver.cpp
         PlatformGLResolver.hpp
         PlatformLoader.hpp
@@ -62,7 +64,7 @@ add_library(Renderer OBJECT
         VertexBufferUsage.hpp
         VertexIndexArray.cpp
         VertexIndexArray.hpp
-        )
+)
 
 target_include_directories(Renderer
         PRIVATE

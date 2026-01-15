@@ -27,27 +27,22 @@ enum class Backend : std::uint8_t
     /**
      * Detected EGL backend (GL build), or GLES backend (ENABLE_GLES=ON build).
      */
-    EglGles = 1,
+    Egl = 1,
 
     /**
      * Detected GLX backend (GL build only).
      */
-    GlxGl = 2,
+    Glx = 2,
 
     /**
      * Detected WGL backend (GL build only).
      */
-    WglGl = 3,
+    Wgl = 3,
 
     /**
      * WegGl proc resolver (Emscripten only).
      */
-    WebGl = 4,
-
-    /**
-     * User resolver is used, no backend detection.
-     */
-    UserResolver = 5
+    WebGl = 4
 };
 
 /**
@@ -138,18 +133,35 @@ public:
      * @return Procedure address or nullptr.
      */
     static auto GladResolverThunk(const char* name) -> GLapiproc;
-private:
-    /**
-     * GL resolver function pointer type.
-     */
-    using GetProcFunc = GLapiproc (*)(const char* name);
 
+private:
     void OpenNativeLibraries();
     void ResolveProviderFunctions();
     void DetectBackend();
     void SetBackendDefault();
     auto LoadGlad() -> bool;
-    auto Resolve(const char* name) const -> GLapiproc;
+
+    /* Provider function types (kept private to avoid header pollution elsewhere). */
+    using EglGetProcAddressFn = void* (*)(const char*);
+
+#ifndef _WIN32
+    /* glXGetProcAddress/glXGetProcAddressARB return a function pointer. */
+    using GlxGetProcAddressFn = void (*(*)(const unsigned char*))(void);
+#else
+    using WglGetProcAddressFn = PROC (WINAPI*)(LPCSTR);
+#endif
+
+    auto ResolveUnlocked(const char* name,
+                         UserResolver userResolver,
+                         void* userData,
+                         Backend backend,
+                         EglGetProcAddressFn eglGetProcAddressFn,
+#ifndef _WIN32
+                         GlxGetProcAddressFn glxGetProcAddressFn
+#else
+                         WglGetProcAddressFn wglGetProcAddressFn
+#endif
+                         ) const -> GLapiproc;
 
     mutable std::mutex m_mutex;                   //!< Mutex to synchronize initialization and access.
     bool m_loaded{false};                         //!< True if the resolver is initialized.
@@ -160,14 +172,54 @@ private:
     UserResolver m_userResolver{nullptr};         //!< User provided function resolver. Optional, may be null.
     void* m_userData{nullptr};                    //!< User data to pass to user provided function resolver.
 
-    DynamicLibrary m_eglLib;                      //!< EGL library handle. Optional, may be null.
-    DynamicLibrary m_glLib;                       //!< GL library handle. Optional, may be null.
-    DynamicLibrary m_glxLib;                      //!< GLX library handle. Optional, may be null.
+    DynamicLibrary m_eglLib;                      //!< EGL library handle. Optional, may be empty.
+    DynamicLibrary m_glLib;                       //!< GL library handle. Optional, may be empty.
+    DynamicLibrary m_glxLib;                      //!< GLX library handle. Optional, may be empty.
 
-    GetProcFunc m_eglGetProcAddress{nullptr};     //!< Function pointer to EGL proc resolver function.
-    GetProcFunc m_glxGetProcAddress{nullptr};     //!< Function pointer to GLX proc resolver function.
-    GetProcFunc m_wglGetProcAddress{nullptr};     //!< Function pointer to WGL proc resolver function.
+    EglGetProcAddressFn m_eglGetProcAddress{nullptr}; //!< eglGetProcAddress handle.
+#ifndef _WIN32
+    GlxGetProcAddressFn m_glxGetProcAddress{nullptr}; //!< glXGetProcAddress* handle.
+#else
+    WglGetProcAddressFn m_wglGetProcAddress{nullptr}; //!< wglGetProcAddress handle.
+#endif
 };
+
+/**
+ * @brief Converts a Backend enum value to a human-readable string.
+ *
+ * @param backend Backend enum value.
+ * @return Constant string representation of the backend.
+ */
+inline auto BackendToString(Backend backend) -> const char*
+{
+    switch (backend)
+    {
+        case Backend::None:
+        {
+            return "None";
+        }
+        case Backend::Egl:
+        {
+            return "EGL";
+        }
+        case Backend::Glx:
+        {
+            return "GLX";
+        }
+        case Backend::Wgl:
+        {
+            return "WGL";
+        }
+        case Backend::WebGl:
+        {
+            return "WebGL";
+        }
+        default:
+        {
+            return "Unknown";
+        }
+    }
+}
 
 } // namespace Platform
 } // namespace Renderer

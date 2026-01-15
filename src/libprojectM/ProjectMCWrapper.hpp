@@ -30,7 +30,6 @@ namespace libprojectM {
 class projectMWrapper : public ProjectM
 {
 public:
-
     void PresetSwitchFailedEvent(const std::string& presetFilename,
                                  const std::string& failureMessage) const override;
     void PresetSwitchRequestedEvent(bool isHardCut) const override;

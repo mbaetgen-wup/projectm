@@ -2,7 +2,6 @@ if(NOT ENABLE_SDL_UI OR ENABLE_EMSCRIPTEN OR CMAKE_SYSTEM_NAME STREQUAL Android)
     return()
 endif()
 
-
 add_executable(projectM-Test-UI
         ConfigFile.cpp
         ConfigFile.h

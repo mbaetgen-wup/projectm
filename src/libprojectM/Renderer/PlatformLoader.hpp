@@ -295,7 +295,7 @@ inline auto IsCurrentGlx(const DynamicLibrary& glLib) -> bool
 inline auto IsCurrentWgl() -> bool
 {
     HMODULE glModule = ::GetModuleHandleA("opengl32.dll");
-    if (!glModule)
+    if (glModule == nullptr)
     {
         return false;
     }
