@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstring>
 #include <string>
 
 #ifndef __EMSCRIPTEN__
@@ -330,6 +331,38 @@ auto IsCurrentWgl() -> bool;
 
 // ---------------- Inline implementations -----------------------------------
 
+/**
+ * @brief Converts a symbol pointer (void*) into a function pointer type without UB.
+ *
+ * dlsym/GetProcAddress return data pointers (void* / FARPROC). Converting those to function
+ * pointers via reinterpret_cast is technically undefined behavior in C++.
+ *
+ * This helper uses memcpy to transfer the representation into a function pointer type.
+ * If the platform uses different sizes for data pointers and function pointers, the
+ * conversion fails and returns nullptr.
+ *
+ * @tparam Fn Function pointer type.
+ * @param symbol Symbol pointer as void*.
+ * @return Function pointer or nullptr.
+ */
+template <typename Fn>
+auto SymbolToFunction(void* symbol) -> Fn
+{
+    if (symbol == nullptr)
+    {
+        return nullptr;
+    }
+
+    if (sizeof(Fn) != sizeof(void*))
+    {
+        return nullptr;
+    }
+
+    Fn func = nullptr;
+    std::memcpy(&func, &symbol, sizeof(Fn));
+    return func;
+}
+
 inline auto IsCurrentEgl(const DynamicLibrary& eglLib) -> bool
 {
     if (!eglLib.IsOpen())
@@ -338,7 +371,8 @@ inline auto IsCurrentEgl(const DynamicLibrary& eglLib) -> bool
     }
 
     using EglGetCurrentContext = void* (*)();
-    auto func = reinterpret_cast<EglGetCurrentContext>(eglLib.GetSymbol("eglGetCurrentContext"));
+    void* sym = eglLib.GetSymbol("eglGetCurrentContext");
+    auto func = SymbolToFunction<EglGetCurrentContext>(sym);
     return func != nullptr && func() != nullptr;
 }
 
@@ -352,10 +386,12 @@ inline auto IsCurrentGlx(const DynamicLibrary& glLib) -> bool
 
     using GlxGetCurrentContext = void* (*)();
 
-    auto func = reinterpret_cast<GlxGetCurrentContext>(glLib.GetSymbol("glXGetCurrentContextARB"));
+    void* sym = glLib.GetSymbol("glXGetCurrentContextARB");
+    auto func = SymbolToFunction<GlxGetCurrentContext>(sym);
     if (func == nullptr)
     {
-        func = reinterpret_cast<GlxGetCurrentContext>(glLib.GetSymbol("glXGetCurrentContext"));
+        sym = glLib.GetSymbol("glXGetCurrentContext");
+        func = SymbolToFunction<GlxGetCurrentContext>(sym);
     }
 
     return func != nullptr && func() != nullptr;
@@ -371,7 +407,8 @@ inline auto IsCurrentWgl() -> bool
     }
 
     using WglGetCurrentContext = void* (WINAPI*)(void);
-    auto func = reinterpret_cast<WglGetCurrentContext>(::GetProcAddress(glModule, "wglGetCurrentContext"));
+    void* sym = reinterpret_cast<void*>(::GetProcAddress(glModule, "wglGetCurrentContext"));
+    auto func = SymbolToFunction<WglGetCurrentContext>(sym);
     return func != nullptr && func() != nullptr;
 }
 
