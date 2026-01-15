@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <string>
 
@@ -361,6 +362,58 @@ auto SymbolToFunction(void* symbol) -> Fn
     Fn func = nullptr;
     std::memcpy(&func, &symbol, sizeof(Fn));
     return func;
+}
+
+/**
+ * @brief Converts a function pointer into a symbol pointer representation without UB.
+ *
+ * The inverse of SymbolToFunction(). This is used at API boundaries where legacy
+ * interfaces represent procedure addresses as void*.
+ *
+ * @tparam Fn Function pointer type.
+ * @param func Function pointer.
+ * @return Symbol pointer as void* or nullptr if not representable.
+ */
+template <typename Fn>
+auto FunctionToSymbol(Fn func) -> void*
+{
+    if (func == nullptr)
+    {
+        return nullptr;
+    }
+
+    if (sizeof(Fn) != sizeof(void*))
+    {
+        return nullptr;
+    }
+
+    void* symbol = nullptr;
+    std::memcpy(&symbol, &func, sizeof(void*));
+    return symbol;
+}
+
+/**
+ * @brief Converts a function pointer into an integer representation (best-effort).
+ *
+ * Useful for validating platform-specific sentinel values (e.g. Windows WGL).
+ * Returns 0 if the conversion is not representable.
+ */
+template <typename Fn>
+auto FunctionToInteger(Fn func) -> std::uintptr_t
+{
+    if (func == nullptr)
+    {
+        return 0;
+    }
+
+    if (sizeof(Fn) != sizeof(void*))
+    {
+        return 0;
+    }
+
+    std::uintptr_t value = 0;
+    std::memcpy(&value, &func, sizeof(std::uintptr_t));
+    return value;
 }
 
 inline auto IsCurrentEgl(const DynamicLibrary& eglLib) -> bool

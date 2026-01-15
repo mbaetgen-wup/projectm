@@ -313,7 +313,7 @@ void GLResolver::ResolveProviderFunctions()
         }
         if (sym != nullptr)
         {
-            m_eglGetProcAddress = reinterpret_cast<EglGetProcAddressFn>(sym);
+            m_eglGetProcAddress = SymbolToFunction<EglGetProcAddressFn>(sym);
         }
     }
 
@@ -328,7 +328,7 @@ void GLResolver::ResolveProviderFunctions()
         }
         if (sym != nullptr)
         {
-            m_wglGetProcAddress = reinterpret_cast<WglGetProcAddressFn>(sym);
+            m_wglGetProcAddress = SymbolToFunction<WglGetProcAddressFn>(sym);
         }
     }
 #else
@@ -353,7 +353,7 @@ void GLResolver::ResolveProviderFunctions()
         }
         if (sym != nullptr)
         {
-            m_glxGetProcAddress = reinterpret_cast<GlxGetProcAddressFn>(sym);
+            m_glxGetProcAddress = SymbolToFunction<GlxGetProcAddressFn>(sym);
         }
     }
 #endif
@@ -437,7 +437,7 @@ namespace {
  */
 auto gladBridgeResolverThunk(const char* name) -> GLADapiproc
 {
-    return reinterpret_cast<GLADapiproc>(GLResolver::GladResolverThunk(name));
+    return SymbolToFunction<GLADapiproc>(GLResolver::GladResolverThunk(name));
 }
 
 } // namespace
@@ -509,7 +509,7 @@ auto GLResolver::ResolveUnlocked(const char* name,
         EglProc proc = eglGetProcAddressFn(name);
         if (proc != nullptr)
         {
-            return reinterpret_cast<void*>(proc);
+            return FunctionToSymbol(proc);
         }
     }
 
@@ -519,7 +519,7 @@ auto GLResolver::ResolveUnlocked(const char* name,
         auto proc = glxGetProcAddressFn(reinterpret_cast<const unsigned char*>(name));
         if (proc != nullptr)
         {
-            return reinterpret_cast<void*>(proc);
+            return FunctionToSymbol(proc);
         }
     }
 #else
@@ -528,7 +528,13 @@ auto GLResolver::ResolveUnlocked(const char* name,
         PROC proc = wglGetProcAddressFn(name);
         if (proc != nullptr)
         {
-            return reinterpret_cast<void*>(proc);
+            // wglGetProcAddress can return special sentinel values (1,2,3,-1) for core symbols.
+            // Treat those as invalid and allow fallback to GetProcAddress/dlsym paths.
+            const std::uintptr_t raw = FunctionToInteger(proc);
+            if (raw != 1u && raw != 2u && raw != 3u && raw != static_cast<std::uintptr_t>(~0u))
+            {
+                return FunctionToSymbol(proc);
+            }
         }
     }
 #endif
