@@ -30,7 +30,7 @@ using LibHandle = void*;
 #endif
 
 // -------------------------------------------------------------------------
-// Common function (Windows / POSIX / Emscripten)
+// Common (Windows / POSIX / Emscripten)
 // -------------------------------------------------------------------------
 
 /**

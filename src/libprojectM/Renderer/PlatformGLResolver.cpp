@@ -317,6 +317,14 @@ void GLResolver::ResolveProviderFunctions()
         if (sym != nullptr)
         {
             m_eglGetProcAddress = SymbolToFunction<EglGetProcAddressFn>(sym);
+            if (m_eglGetProcAddress == nullptr)
+            {
+                LOG_DEBUG("[GLResolver] eglGetProcAddress found but could not be converted to a function pointer");
+            }
+        }
+        else
+        {
+            LOG_DEBUG("[GLResolver] eglGetProcAddress not found (EGL loaded but missing symbol)");
         }
     }
 
@@ -332,6 +340,14 @@ void GLResolver::ResolveProviderFunctions()
         if (sym != nullptr)
         {
             m_wglGetProcAddress = SymbolToFunction<WglGetProcAddressFn>(sym);
+            if (m_wglGetProcAddress == nullptr)
+            {
+                LOG_DEBUG("[GLResolver] wglGetProcAddress found but could not be converted to a function pointer");
+            }
+        }
+        else
+        {
+            LOG_DEBUG("[GLResolver] wglGetProcAddress not found (GL library loaded but missing symbol)");
         }
     }
 #else
@@ -357,6 +373,14 @@ void GLResolver::ResolveProviderFunctions()
         if (sym != nullptr)
         {
             m_glxGetProcAddress = SymbolToFunction<GlxGetProcAddressFn>(sym);
+            if (m_glxGetProcAddress == nullptr)
+            {
+                LOG_DEBUG("[GLResolver] glXGetProcAddress* found but could not be converted to a function pointer");
+            }
+        }
+        else
+        {
+            LOG_DEBUG("[GLResolver] glXGetProcAddress* not found (GLX loaded but missing symbol)");
         }
     }
 #endif
@@ -454,7 +478,10 @@ auto GLResolver::LoadGlad() -> bool
         LOG_DEBUG("[GLResolver] gladLoadGL() succeeded");
         return true;
     }
-    LOG_FATAL("[GLResolver] gladLoadGL() failed");
+    LOG_FATAL(std::string("[GLResolver] gladLoadGL() failed (backend=") +
+              BackendToString(m_backend) +
+              ", egl='" + m_eglLib.LoadedName() + "', gl='" + m_glLib.LoadedName() +
+              "', glx='" + m_glxLib.LoadedName() + "')");
     return false;
 #else
     const int result = gladLoadGLES2(&gladBridgeResolverThunk);
@@ -463,7 +490,10 @@ auto GLResolver::LoadGlad() -> bool
         LOG_DEBUG("[GLResolver] gladLoadGLES2() succeeded");
         return true;
     }
-    LOG_FATAL("[GLResolver] gladLoadGLES2() failed");
+    LOG_FATAL(std::string("[GLResolver] gladLoadGLES2() failed (backend=") +
+              BackendToString(m_backend) +
+              ", egl='" + m_eglLib.LoadedName() + "', gl='" + m_glLib.LoadedName() +
+              "', glx='" + m_glxLib.LoadedName() + "')");
     return false;
 #endif
 }

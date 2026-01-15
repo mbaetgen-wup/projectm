@@ -247,7 +247,7 @@ auto QueryInfo(GLContextInfo& info, std::string& reason) -> bool
     }
 
     const char* ver = SafeStr(glGetString(GL_VERSION));
-    if (ver == nullptr || *ver == 0)
+    if (*ver == 0)
     {
         reason = "No current GL context";
         return false;
@@ -264,7 +264,7 @@ auto QueryInfo(GLContextInfo& info, std::string& reason) -> bool
     info.renderer = SanitizeString(SafeStr(glGetString(GL_RENDERER)));
 
     const char* glsl = SafeStr(glGetString(GL_SHADING_LANGUAGE_VERSION));
-    if (glsl != nullptr && *glsl != 0)
+    if (*glsl != 0)
     {
         info.glslStr = SanitizeString(glsl);
     }
