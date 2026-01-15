@@ -42,7 +42,13 @@ enum class Backend : std::uint8_t
     /**
      * WegGl proc resolver (Emscripten only).
      */
-    WebGl = 4
+    WebGl = 4,
+
+    /**
+     * MacOS native CGL.
+     * Note: CGL will be reported as None until it is assigned in the default fallback.
+     */
+    Cgl = 5
 };
 
 /**
@@ -57,19 +63,30 @@ using UserResolver = void* (*)(const char* name, void* userData);
  * @brief Cross-platform runtime GL/GLES resolver.
  *
  * This resolver:
- *  - Supports: EGL, GLES, GLX, WGL, WebGL or a user supplied resolver.
- *  - Platforms: Android, Emscripten, Linux, Mac, Windows.
- *  - Must be initialized after a GL/GLES context has been created and made current.
- *  - Probes for EGL/GLX/WGL by checking for a current context.
- *  - Uses GLAD2 non-MX entrypoints (gladLoadGL / gladLoadGLES2) via a universal resolver.
- *  - Resolves symbols using the following order (GL/GLES):
- *      1) User resolver callback (if any)
- *      2) Platform provider eglGetProcAddress / glXGetProcAddress* / wglGetProcAddress (when available)
+ *  - Supports backends: CGL (macOS native), EGL (incl. GLES), GLX, WGL, WebGL, libGLVND, ANGLE, or a user supplied resolver.
+ *  - Supports platforms: Android, Emscripten, Linux, macOS, Windows.
+ *  - Must be initialized after a GL/GLES context has been created and made current on the calling thread.
+ *  - Detects the active backend by probing for a current context:
+ *      - EGL via eglGetCurrentContext
+ *      - GLX via glXGetCurrentContext*
+ *      - WGL via wglGetCurrentContext
+ *      - macOS native falls back to CGL/NSOpenGL (no provider GetProcAddress)
+ *  - Uses GLAD2 non-MX entrypoints (gladLoadGL / gladLoadGLES2) with a single universal resolver.
+ *  - Supports libGLVND dispatch on Linux (libOpenGL.so + libGLX.so).
+ *  - Supports ANGLE when libEGL/libGLESv2 are present.
+ *
+ *  - Resolves symbols in the following order (native GL / GLES):
+ *      1) User resolver callback (if provided)
+ *      2) Platform provider:
+ *           - eglGetProcAddress (EGL / ANGLE)
+ *           - glXGetProcAddress / glXGetProcAddressARB (GLX / GLVND)
+ *           - wglGetProcAddress (WGL)
  *      3) Global symbol table (RTLD_DEFAULT / main module)
- *      4) Symbols from opened libEGL / libGL / opengl32
- *  - Resolves symbols using the following order (Emscripten):
- *      1) User resolver callback (if any)
- *      2) emscripten_webgl_get_proc_address()
+ *      4) Symbols from explicitly opened libraries (libEGL, libGL, OpenGL.framework, opengl32)
+ *
+ *  - Resolves symbols in the following order (Emscripten):
+ *      1) User resolver callback (if provided)
+ *      2) emscripten_webgl_get_proc_address / emscripten_webgl2_get_proc_address
  */
 class GLResolver
 {
@@ -104,11 +121,6 @@ public:
     auto Initialize(UserResolver resolver = nullptr, void* userData = nullptr) -> bool;
 
     /**
-     * @brief Shuts down the resolver and releases library handles.
-     */
-    void Shutdown();
-
-    /**
      * @brief Returns true if the resolver was successfully initialized.
      */
     auto IsLoaded() const -> bool;
@@ -141,12 +153,12 @@ private:
     void SetBackendDefault();
     auto LoadGlad() -> bool;
 
-    /* Provider function types (kept private to avoid header pollution elsewhere). */
-    using EglGetProcAddressFn = void* (*)(const char*);
+    using EglProc = void (*)();
+    using EglGetProcAddressFn = EglProc (*)(const char* name);
 
 #ifndef _WIN32
     /* glXGetProcAddress/glXGetProcAddressARB return a function pointer. */
-    using GlxGetProcAddressFn = void (*(*)(const unsigned char*))(void);
+    using GlxGetProcAddressFn = void (*(*)(const unsigned char*))();
 #else
     using WglGetProcAddressFn = PROC (WINAPI*)(LPCSTR);
 #endif
@@ -213,6 +225,10 @@ inline auto BackendToString(Backend backend) -> const char*
         case Backend::WebGl:
         {
             return "WebGL";
+        }
+        case Backend::Cgl:
+        {
+            return "CGL";
         }
         default:
         {

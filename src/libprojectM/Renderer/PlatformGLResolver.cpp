@@ -13,6 +13,7 @@
 #include <Logging.hpp>
 
 #include <array>
+#include <cstdint>
 #include <cstdio>
 
 #ifdef _WIN32
@@ -30,12 +31,13 @@ namespace Platform {
 
 GLResolver::~GLResolver()
 {
-    SOIL_GL_Destroy();
-
-    // make sure handles are released
-    m_eglLib.Close();
-    m_glLib.Close();
-    m_glxLib.Close();
+    /*
+     * Process-lifetime singleton: destructor runs during process teardown.
+     * Do not call into GL or unload GL driver libraries here:
+     *  - GL context may already be destroyed on this thread.
+     *  - Other threads may still be running.
+     * OS will reclaim mappings on exit.
+     */
 }
 
 auto GLResolver::Instance() -> GLResolver&
@@ -50,6 +52,8 @@ void GLResolver::SetBackendDefault()
     {
 #ifdef __EMSCRIPTEN__
         m_backend = Backend::WebGl;
+#elif defined(__APPLE__)
+        m_backend = Backend::Cgl;
 #elif defined(USE_GLES)
         m_backend = Backend::Egl;
 #elif defined(_WIN32)
@@ -63,7 +67,7 @@ void GLResolver::SetBackendDefault()
 auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
 {
     // Avoids holding m_mutex while calling into GLAD (prevents deadlocks),
-    // Prevent concurrent Initialize()/Shutdown(),
+    // Prevent concurrent Initialize()
     std::unique_lock<std::mutex> lock(m_mutex);
 
     if (m_loaded)
@@ -101,16 +105,16 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
 
     lock.lock();
 
-    if (loaded)
+    if (!loaded)
+    {
+        m_loaded = false;
+    }
+    else
     {
         // set default in case detection failed, but loading succeeded
         SetBackendDefault();
 
         lock.unlock();
-
-        // init SOIL2 gl functions
-        SOIL_GL_SetResolver(&GLResolver::GladResolverThunk);
-        SOIL_GL_Init();
 
         GLContextCheck::Builder glCheck;
 #ifdef USE_GLES
@@ -125,16 +129,29 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
             .WithRequireCoreProfile(true);
 #endif
 
+        const auto glDetails = glCheck.Check();
+
         lock.lock();
 
-        auto glDetails = glCheck.Check();
-        LOG_INFO(std::string("[GLResolver] GL Info: ") + GLContextCheck::FormatCompactLine(glDetails.info) + " backend=" + BackendToString(m_backend));
+        LOG_INFO(std::string("[GLResolver] GL Info: ") +
+                 GLContextCheck::FormatCompactLine(glDetails.info) +
+                 " backend=" + BackendToString(m_backend));
         if (!glDetails.success)
         {
             LOG_FATAL(std::string("[GLResolver] GL Check failed: ") + glDetails.reason);
         }
 
-        m_loaded = glDetails.success;
+        lock.unlock();
+
+        const bool ready = glDetails.success;
+        if (ready)
+        {
+            SOIL_GL_SetResolver(&GLResolver::GladResolverThunk);
+            SOIL_GL_Init();
+        }
+
+        lock.lock();
+        m_loaded = ready;
     }
 
     m_initializing = false;
@@ -142,35 +159,6 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
     lock.unlock();
 
     return m_loaded;
-}
-
-void GLResolver::Shutdown()
-{
-    std::unique_lock<std::mutex> lock(m_mutex);
-
-    while (m_initializing)
-    {
-        m_initCv.wait(lock);
-    }
-
-    SOIL_GL_Destroy();
-
-    m_loaded = false;
-    m_backend = Backend::None;
-
-    m_userResolver = nullptr;
-    m_userData = nullptr;
-
-    m_eglGetProcAddress = nullptr;
-#ifndef _WIN32
-    m_glxGetProcAddress = nullptr;
-#else
-    m_wglGetProcAddress = nullptr;
-#endif
-
-    m_eglLib.Close();
-    m_glLib.Close();
-    m_glxLib.Close();
 }
 
 auto GLResolver::IsLoaded() const -> bool
@@ -370,14 +358,17 @@ void GLResolver::ResolveProviderFunctions()
     }
 #endif
 
-    {
-        std::array<char, 256> buf{};
-        std::snprintf(buf.data(), buf.size(), "[GLResolver] Library handles: egl=%p gl=%p glx=%p",
-            reinterpret_cast<void*>(m_eglLib.Handle()),
-            reinterpret_cast<void*>(m_glLib.Handle()),
-            reinterpret_cast<void*>(m_glxLib.Handle()));
-        LOG_DEBUG(std::string(buf.data()));
-    }
+    LOG_DEBUG(std::string("[GLResolver] EGL  handle=") +
+              std::to_string(reinterpret_cast<std::uintptr_t>(m_eglLib.Handle())) +
+              " lib=\"" + m_eglLib.LoadedName() + "\"");
+
+    LOG_DEBUG(std::string("[GLResolver] GL   handle=") +
+              std::to_string(reinterpret_cast<std::uintptr_t>(m_glLib.Handle())) +
+              " lib=\"" + m_glLib.LoadedName() + "\"");
+
+    LOG_DEBUG(std::string("[GLResolver] GLX  handle=") +
+              std::to_string(reinterpret_cast<std::uintptr_t>(m_glxLib.Handle())) +
+              " lib=\"" + m_glxLib.LoadedName() + "\"");
 
 }
 
@@ -514,10 +505,11 @@ auto GLResolver::ResolveUnlocked(const char* name,
     // 2) Platform provider getProcAddress (prefer for correctness, extensions, GLVND dispatch)
     if ((backend == Backend::Egl || backend == Backend::None) && eglGetProcAddressFn != nullptr)
     {
-        void* ptr = eglGetProcAddressFn(name);
-        if (ptr != nullptr)
+        // eglGetProcAddress returns a function pointer type; convert only at the boundary.
+        EglProc proc = eglGetProcAddressFn(name);
+        if (proc != nullptr)
         {
-            return ptr;
+            return reinterpret_cast<void*>(proc);
         }
     }
 
