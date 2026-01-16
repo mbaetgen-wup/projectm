@@ -169,14 +169,18 @@ public:
 
     ~DynamicLibrary()
     {
-        Close();
+        if (m_closeOnDestruct)
+        {
+            Close();
+        }
     }
 
     DynamicLibrary(const DynamicLibrary&) = delete;
     auto operator=(const DynamicLibrary&) -> DynamicLibrary& = delete;
 
     DynamicLibrary(DynamicLibrary&& other) noexcept
-        : m_handle(other.m_handle)
+        : m_closeOnDestruct(other.m_closeOnDestruct)
+        , m_handle(other.m_handle)
     {
         other.m_handle = nullptr;
     }
@@ -186,6 +190,7 @@ public:
         if (this != &other)
         {
             Close();
+            m_closeOnDestruct = other.m_closeOnDestruct;
             m_handle = other.m_handle;
             other.m_handle = nullptr;
         }
@@ -218,7 +223,27 @@ public:
 
 #ifdef _WIN32
             ::SetLastError(0);
+#if defined(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS)
+            // Prefer the safer default DLL search order when loading by bare name.
+            // Fall back to LoadLibraryA for compatibility (e.g., app-local ANGLE deployments).
+            HMODULE handle = nullptr;
+            const bool hasPath = (std::strchr(name, '\\') != nullptr) || (std::strchr(name, '/') != nullptr);
+            if (hasPath)
+            {
+                handle = ::LoadLibraryA(name);
+            }
+            else
+            {
+                handle = ::LoadLibraryExA(name, nullptr, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+                if (handle == nullptr)
+                {
+                    handle = ::LoadLibraryA(name);
+                }
+            }
+            m_handle = handle;
+#else
             m_handle = ::LoadLibraryA(name);
+#endif
 #else
             ::dlerror(); // clear any prior error
             m_handle = ::dlopen(name, RTLD_LAZY | RTLD_LOCAL);
@@ -297,6 +322,19 @@ public:
         m_handle = nullptr;
         m_loadedName.clear();
         m_lastError.clear();
+    }
+
+    /**
+     * @brief Controls whether the library is automatically closed in the destructor.
+     *
+     * Some libraries (notably OpenGL drivers) are safest to keep loaded until process exit,
+     * especially when used from a process-lifetime singleton.
+     *
+     * @param enabled If false, the destructor will not call Close().
+     */
+    void SetCloseOnDestruct(bool enabled)
+    {
+        m_closeOnDestruct = enabled;
     }
 
     /**
@@ -390,6 +428,7 @@ public:
     }
 
 private:
+    bool m_closeOnDestruct{true}; //!< If true, Close() is called from the destructor.
     LibHandle m_handle{};          //!< Library handle used to access the system library.
     std::string m_loadedName;      //< Successfully opened library name.
     std::string m_lastError;       //< Last Open() error message.

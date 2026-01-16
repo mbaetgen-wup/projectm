@@ -28,28 +28,27 @@ enum class Backend : std::uint8_t
     /**
      * Detected EGL backend (GL build), or GLES backend (ENABLE_GLES=ON build).
      */
-    Egl = 1,
+    EGL = 1,
 
     /**
      * Detected GLX backend (GL build only).
      */
-    Glx = 2,
+    GLX = 2,
 
     /**
      * Detected WGL backend (GL build only).
      */
-    Wgl = 3,
+    WGL = 3,
 
     /**
      * WegGl proc resolver (Emscripten only).
      */
-    WebGl = 4,
+    WebGL = 4,
 
     /**
      * MacOS native CGL.
-     * Note: CGL will be reported as None until it is assigned in the default fallback.
      */
-    Cgl = 5
+    CGL = 5
 };
 
 /**
@@ -129,6 +128,10 @@ public:
     /**
      * @brief Resolves a function pointer by consulting all sources in priority order.
      *
+     * @note On some GLX implementations, glXGetProcAddress* may return a non-null pointer even
+     * for unknown symbols. Treat the result as best-effort and validate availability via
+     * the appropriate version/extension queries.
+     *
      * @param name Function name.
      * @return Procedure address or nullptr.
      */
@@ -207,23 +210,23 @@ inline auto BackendToString(Backend backend) -> const char*
         {
             return "None";
         }
-        case Backend::Egl:
+        case Backend::EGL:
         {
             return "EGL";
         }
-        case Backend::Glx:
+        case Backend::GLX:
         {
             return "GLX";
         }
-        case Backend::Wgl:
+        case Backend::WGL:
         {
             return "WGL";
         }
-        case Backend::WebGl:
+        case Backend::WebGL:
         {
             return "WebGL";
         }
-        case Backend::Cgl:
+        case Backend::CGL:
         {
             return "CGL";
         }

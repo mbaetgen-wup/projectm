@@ -104,6 +104,25 @@ auto HasBasicGLEntrypoints(std::string& reason) -> bool
     return true;
 }
 
+static void ClearGlErrors()
+{
+    if (glGetError == nullptr)
+    {
+        return;
+    }
+
+    // OpenGL error state is sticky until drained. Avoid false negatives in probes.
+    // Cap the loop to prevent getting stuck on misbehaving drivers.
+    for (int i = 0; i < 32; ++i)
+    {
+        const GLenum err = glGetError();
+        if (err == GL_NO_ERROR)
+        {
+            break;
+        }
+    }
+}
+
 auto QueryMajorMinor(int& major, int& minor) -> bool
 {
     if (glGetIntegerv == nullptr)
@@ -115,6 +134,8 @@ auto QueryMajorMinor(int& major, int& minor) -> bool
 
     major = 0;
     minor = 0;
+
+    ClearGlErrors();
 
     glGetIntegerv(PM_GL_MAJOR_VERSION, &major);
     glGetIntegerv(PM_GL_MINOR_VERSION, &minor);
@@ -170,6 +191,9 @@ auto ProfileString() -> std::string
     }
 
     int mask = 0;
+
+    ClearGlErrors();
+
     glGetIntegerv(PM_GL_CONTEXT_PROFILE_MASK, &mask);
 
     if (glGetError() != GL_NO_ERROR)
@@ -198,6 +222,9 @@ auto FlagsString() -> std::string
     }
 
     int flags = 0;
+
+    ClearGlErrors();
+
     glGetIntegerv(PM_GL_CONTEXT_FLAGS, &flags);
 
     if (glGetError() != GL_NO_ERROR)
@@ -246,6 +273,8 @@ auto QueryInfo(GLContextInfo& info, std::string& reason) -> bool
         return false;
     }
 
+    ClearGlErrors();
+
     const char* ver = SafeStr(glGetString(GL_VERSION));
     if (*ver == 0)
     {
@@ -254,8 +283,14 @@ auto QueryInfo(GLContextInfo& info, std::string& reason) -> bool
     }
 
     const bool isGLES =
-        (StartsWith(ver, "OpenGL ES")) ||
-        (std::strstr(ver, "OpenGL ES") != nullptr);
+#if defined(__EMSCRIPTEN__)
+        // WebGL is a GLES-like API surface
+        true;
+#else
+        StartsWith(ver, "OpenGL ES") ||
+        std::strstr(ver, "OpenGL ES") != nullptr ||
+        std::strstr(ver, "WebGL") != nullptr;
+#endif
 
     info.api = isGLES ? GLApi::OpenGLES : GLApi::OpenGL;
     info.versionStr = ver;

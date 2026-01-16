@@ -48,20 +48,59 @@ auto GLResolver::Instance() -> GLResolver&
 
 void GLResolver::SetBackendDefault()
 {
-    if (m_backend == Backend::None)
+    if (m_backend != Backend::None)
     {
-#ifdef __EMSCRIPTEN__
-        m_backend = Backend::WebGl;
-#elif defined(__APPLE__)
-        m_backend = Backend::Cgl;
-#elif defined(USE_GLES)
-        m_backend = Backend::Egl;
-#elif defined(_WIN32)
-        m_backend = Backend::Wgl;
-#else
-        m_backend = Backend::Glx;
-#endif
+        return;
     }
+
+#ifdef __EMSCRIPTEN__
+    m_backend = Backend::WebGL;
+    return;
+#endif
+
+    // Only assign a default when it is unambiguous and does not reduce resolver coverage.
+    // Leaving Backend::None enables the generic resolver path (tries all available providers).
+    const bool hasEglProvider = (m_eglGetProcAddress != nullptr);
+
+#ifndef _WIN32
+    const bool hasGlxProvider = (m_glxGetProcAddress != nullptr);
+#else
+    const bool hasWglProvider = (m_wglGetProcAddress != nullptr);
+#endif
+
+#if defined(__APPLE__) && !defined(_WIN32)
+    // macOS native OpenGL: no provider GetProcAddress; treat as CGL if nothing else is available.
+    const bool hasAnyProvider = hasEglProvider;
+    if (!hasAnyProvider)
+    {
+        m_backend = Backend::CGL;
+        return;
+    }
+#endif
+
+#ifndef _WIN32
+    if (hasEglProvider && !hasGlxProvider)
+    {
+        m_backend = Backend::EGL;
+        return;
+    }
+    if (hasGlxProvider && !hasEglProvider)
+    {
+        m_backend = Backend::GLX;
+        return;
+    }
+#else
+    if (hasEglProvider && !hasWglProvider)
+    {
+        m_backend = Backend::EGL;
+        return;
+    }
+    if (hasWglProvider && !hasEglProvider)
+    {
+        m_backend = Backend::WGL;
+        return;
+    }
+#endif
 }
 
 auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
@@ -261,8 +300,11 @@ auto GLResolver::HasCurrentContext(std::string& outReason) const -> bool
     // WGL (Windows desktop GL)
 #ifdef _WIN32
     // Note: ANGLE on Windows typically uses EGL; we probe that separately above.
-    wglAvailable = true;
-    wglCurrent = IsCurrentWgl();
+    {
+        const HMODULE glModule = ::GetModuleHandleA("opengl32.dll");
+        wglAvailable = glModule != nullptr;
+        wglCurrent = wglAvailable ? IsCurrentWgl() : false;
+    }
 #endif
 
     // CGL (macOS native OpenGL)
@@ -313,6 +355,10 @@ auto GLResolver::HasCurrentContext(std::string& outReason) const -> bool
     if (wglAvailable)
     {
         reason += "WGL: no current context; ";
+    }
+    else
+    {
+        reason += "WGL: opengl32.dll not loaded; ";
     }
 #endif
 
@@ -516,14 +562,32 @@ void GLResolver::OpenNativeLibraries()
     {
         LOG_DEBUG(std::string("[GLResolver] Failed to open GL library: ") + m_glLib.LastError());
     }
+
+    // GLResolver is a process-lifetime singleton. Keep successfully loaded driver libraries
+    // mapped until process exit to avoid shutdown-order issues during teardown.
+    if (m_eglLib.IsOpen())
+    {
+        m_eglLib.SetCloseOnDestruct(false);
+    }
+    if (m_glLib.IsOpen())
+    {
+        m_glLib.SetCloseOnDestruct(false);
+    }
+    if (m_glxLib.IsOpen())
+    {
+        m_glxLib.SetCloseOnDestruct(false);
+    }
 }
 
 void GLResolver::ResolveProviderFunctions()
 {
     // EGL
-    if (m_eglLib.IsOpen())
     {
-        void* sym = m_eglLib.GetSymbol("eglGetProcAddress");
+        void* sym = nullptr;
+        if (m_eglLib.IsOpen())
+        {
+            sym = m_eglLib.GetSymbol("eglGetProcAddress");
+        }
         if (sym == nullptr)
         {
             sym = DynamicLibrary::FindGlobalSymbol("eglGetProcAddress");
@@ -536,7 +600,7 @@ void GLResolver::ResolveProviderFunctions()
                 LOG_DEBUG("[GLResolver] eglGetProcAddress found but could not be converted to a function pointer");
             }
         }
-        else
+        else if (m_eglLib.IsOpen())
         {
             LOG_DEBUG("[GLResolver] eglGetProcAddress not found (EGL loaded but missing symbol)");
         }
@@ -544,9 +608,12 @@ void GLResolver::ResolveProviderFunctions()
 
 #ifdef _WIN32
     // WGL
-    if (m_glLib.IsOpen())
     {
-        void* sym = m_glLib.GetSymbol("wglGetProcAddress");
+        void* sym = nullptr;
+        if (m_glLib.IsOpen())
+        {
+            sym = m_glLib.GetSymbol("wglGetProcAddress");
+        }
         if (sym == nullptr)
         {
             sym = DynamicLibrary::FindGlobalSymbol("wglGetProcAddress");
@@ -559,31 +626,44 @@ void GLResolver::ResolveProviderFunctions()
                 LOG_DEBUG("[GLResolver] wglGetProcAddress found but could not be converted to a function pointer");
             }
         }
-        else
+        else if (m_glLib.IsOpen())
         {
             LOG_DEBUG("[GLResolver] wglGetProcAddress not found (GL library loaded but missing symbol)");
         }
     }
 #else
     // GLX
-    if (m_glxLib.IsOpen())
     {
-        // Try libs first
-        void* sym = m_glxLib.GetSymbol("glXGetProcAddressARB");
-        if (sym == nullptr)
+        void* sym = nullptr;
+
+        // Prefer explicit library handles when we have them.
+        if (m_glxLib.IsOpen())
         {
-            sym = m_glxLib.GetSymbol("glXGetProcAddress");
+            sym = m_glxLib.GetSymbol("glXGetProcAddressARB");
+            if (sym == nullptr)
+            {
+                sym = m_glxLib.GetSymbol("glXGetProcAddress");
+            }
         }
+        if (sym == nullptr && m_glLib.IsOpen())
+        {
+            sym = m_glLib.GetSymbol("glXGetProcAddressARB");
+            if (sym == nullptr)
+            {
+                sym = m_glLib.GetSymbol("glXGetProcAddress");
+            }
+        }
+
+        // Finally, try global lookup (host might already have GLX loaded).
         if (sym == nullptr)
         {
-            // Try both names via global lookup as well. Depending on which GL/GLX libs
-            // are already present in the process, only one may be exported.
             sym = DynamicLibrary::FindGlobalSymbol("glXGetProcAddressARB");
             if (sym == nullptr)
             {
                 sym = DynamicLibrary::FindGlobalSymbol("glXGetProcAddress");
             }
         }
+
         if (sym != nullptr)
         {
             m_glxGetProcAddress = SymbolToFunction<GlxGetProcAddressFn>(sym);
@@ -592,9 +672,9 @@ void GLResolver::ResolveProviderFunctions()
                 LOG_DEBUG("[GLResolver] glXGetProcAddress* found but could not be converted to a function pointer");
             }
         }
-        else
+        else if (m_glxLib.IsOpen() || m_glLib.IsOpen())
         {
-            LOG_DEBUG("[GLResolver] glXGetProcAddress* not found (GLX loaded but missing symbol)");
+            LOG_DEBUG("[GLResolver] glXGetProcAddress* not found (GLX/GL loaded but missing symbol)");
         }
     }
 #endif
@@ -615,18 +695,53 @@ void GLResolver::ResolveProviderFunctions()
 void GLResolver::DetectBackend()
 {
     // Detect current context provider
-    // This is best-effort: on some platforms (e.g. macOS/CGL) it may report "unknown"
+    // This is best-effort: on some platforms (e.g. macOS/CGL) it may report "none"
 
 #ifdef __EMSCRIPTEN__
-    m_backend = Backend::WebGl;
+    m_backend = Backend::WebGL;
 #else
-    const bool usingEgl = m_eglLib.IsOpen() && IsCurrentEgl(m_eglLib);
+    bool usingEgl = false;
+
+    if (m_eglLib.IsOpen())
+    {
+        usingEgl = IsCurrentEgl(m_eglLib);
+    }
+#if !defined(_WIN32)
+    else
+    {
+        // POSIX: detect EGL even if the host preloaded/linked EGL and dlopen() failed.
+        using EglGetCurrentContextFn = void* (*)();
+        void* sym = DynamicLibrary::FindGlobalSymbol("eglGetCurrentContext");
+        auto func = SymbolToFunction<EglGetCurrentContextFn>(sym);
+        if (func != nullptr)
+        {
+            usingEgl = (func() != nullptr);
+        }
+    }
+#endif
 
 #ifndef _WIN32
     // Prefer GLX detection via libGLX when available (GLVND setups may load libOpenGL without GLX symbols).
-    const bool usingGlx =
+    bool usingGlx =
         (m_glxLib.IsOpen() && IsCurrentGlx(m_glxLib)) ||
         (m_glLib.IsOpen() && IsCurrentGlx(m_glLib));
+
+    if (!usingGlx)
+    {
+        // Probe via global symbols when the host has GLX loaded but we did not dlopen() it.
+        using GlxGetCurrentContextFn = void* (*)();
+        void* sym = DynamicLibrary::FindGlobalSymbol("glXGetCurrentContextARB");
+        auto func = SymbolToFunction<GlxGetCurrentContextFn>(sym);
+        if (func == nullptr)
+        {
+            sym = DynamicLibrary::FindGlobalSymbol("glXGetCurrentContext");
+            func = SymbolToFunction<GlxGetCurrentContextFn>(sym);
+        }
+        if (func != nullptr)
+        {
+            usingGlx = func() != nullptr;
+        }
+    }
 #else
     const bool usingWgl = IsCurrentWgl();
 #endif
@@ -634,7 +749,7 @@ void GLResolver::DetectBackend()
     if (usingEgl)
     {
         LOG_DEBUG("[GLResolver] Current context: EGL");
-        m_backend = Backend::Egl;
+        m_backend = Backend::EGL;
         return;
     }
 
@@ -642,14 +757,14 @@ void GLResolver::DetectBackend()
     if (usingGlx)
     {
         LOG_DEBUG("[GLResolver] Current context: GLX");
-        m_backend = Backend::Glx;
+        m_backend = Backend::GLX;
         return;
     }
 #else
     if (usingWgl)
     {
         LOG_DEBUG("[GLResolver] Current context: WGL");
-        m_backend = Backend::Wgl;
+        m_backend = Backend::WGL;
         return;
     }
 #endif
@@ -756,7 +871,7 @@ auto GLResolver::ResolveUnlocked(const char* name,
 #else
 
     // 2) Platform provider getProcAddress (prefer for correctness, extensions, GLVND dispatch)
-    if ((backend == Backend::Egl || backend == Backend::None) && eglGetProcAddressFn != nullptr)
+    if ((backend == Backend::EGL || backend == Backend::None) && eglGetProcAddressFn != nullptr)
     {
         // eglGetProcAddress returns a function pointer type; convert only at the boundary.
         EglProc proc = eglGetProcAddressFn(name);
@@ -767,7 +882,7 @@ auto GLResolver::ResolveUnlocked(const char* name,
     }
 
 #ifndef _WIN32
-    if ((backend == Backend::Glx || backend == Backend::None) && glxGetProcAddressFn != nullptr)
+    if ((backend == Backend::GLX || backend == Backend::None) && glxGetProcAddressFn != nullptr)
     {
         auto proc = glxGetProcAddressFn(reinterpret_cast<const unsigned char*>(name));
         if (proc != nullptr)
@@ -776,7 +891,7 @@ auto GLResolver::ResolveUnlocked(const char* name,
         }
     }
 #else
-    if ((backend == Backend::Wgl || backend == Backend::None) && wglGetProcAddressFn != nullptr)
+    if ((backend == Backend::WGL || backend == Backend::None) && wglGetProcAddressFn != nullptr)
     {
         PROC proc = wglGetProcAddressFn(name);
         if (proc != nullptr)
