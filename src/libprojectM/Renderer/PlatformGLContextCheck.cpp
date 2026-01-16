@@ -376,14 +376,14 @@ auto GLContextCheck::FormatCompactLine(const GLContextInfo& info) -> std::string
 {
     std::ostringstream oss;
 
-    oss << "api=" << ApiString(info.api)
-        << " ver=" << FormatVersion(info.major, info.minor)
-        << " profile=" << info.profile
-        << " flags=" << info.flags;
+    oss << "api=\"" << ApiString(info.api) << "\""
+        << " ver=\"" << FormatVersion(info.major, info.minor) << "\""
+        << " profile=\"" << info.profile << "\""
+        << " flags=\"" << info.flags << "\"";
 
     if (!info.glslStr.empty())
     {
-        oss << " glsl=" << info.glslStr;
+        oss << " glsl=\"" << info.glslStr << "\"";
     }
 
     if (!info.vendor.empty())

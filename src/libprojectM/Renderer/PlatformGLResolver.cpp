@@ -135,7 +135,8 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
 
         LOG_INFO(std::string("[GLResolver] GL Info: ") +
                  GLContextCheck::FormatCompactLine(glDetails.info) +
-                 " backend=" + BackendToString(m_backend));
+                 " backend=\"" + BackendToString(m_backend) + "\"" +
+                 " user_resolver=\"" + (m_userResolver != nullptr ? "yes" : "no") + "\"");
         if (!glDetails.success)
         {
             LOG_FATAL(std::string("[GLResolver] GL Check failed: ") + glDetails.reason);
@@ -260,30 +261,24 @@ void GLResolver::OpenNativeLibraries()
 #elif defined(__ANDROID__)
     // Android uses EGL + GLES (no desktop libGL / GLX)
     static constexpr std::array<const char*, 2> kEglNames = {"libEGL.so", nullptr};
-    static constexpr std::array<const char*, 3> kGlNames = {
-        "libGLESv3.so",
-        "libGLESv2.so",
-        nullptr
-    };
+    static constexpr std::array<const char*, 3> kGlNames = { "libGLESv3.so", "libGLESv2.so", nullptr};
 #else
     static constexpr std::array<const char*, 3> kEglNames = {"libEGL.so.1", "libEGL.so", nullptr};
     static constexpr std::array<const char*, 6> kGlNames = {
-        "libGL.so.1",       // legacy/compat umbrella (often provided by GLVND)
-        "libGL.so.0",       // sometimes shipped as .so.0
-        "libOpenGL.so.1",   // GLVND OpenGL dispatcher (core gl* entry points)
-        "libOpenGL.so.0",   // older GLVND soname
+        "libGL.so.1",     // legacy/compat umbrella (often provided by GLVND)
+        "libGL.so.0",     // sometimes shipped as .so.0
+        "libOpenGL.so.1", // GLVND OpenGL dispatcher (core gl* entry points)
+        "libOpenGL.so.0", // older GLVND soname
         "libGL.so",
-        nullptr
-    };
+        nullptr};
 
     // Linux / GLVND note:
     // Some environments (especially minimal/container) may not ship libGL.so.1 but do ship GLVND libs.
     // Keep legacy libGL first for backwards compatibility, but fall back to GLVND-facing libs if needed.
     static constexpr std::array<const char*, 3> kGlxNames = {
-        "libGLX.so.1",      // GLVND GLX dispatcher (glXGetProcAddress*)
-        "libGLX.so.0",      // older GLVND soname
-        nullptr
-    };
+        "libGLX.so.1", // GLVND GLX dispatcher (glXGetProcAddress*)
+        "libGLX.so.0", // older GLVND soname
+        nullptr};
     const bool glxOpened = m_glxLib.Open(kGlxNames.data());
     if (!glxOpened)
     {
@@ -396,7 +391,6 @@ void GLResolver::ResolveProviderFunctions()
     LOG_DEBUG(std::string("[GLResolver] GLX  handle=") +
               std::to_string(reinterpret_cast<std::uintptr_t>(m_glxLib.Handle())) +
               " lib=\"" + m_glxLib.LoadedName() + "\"");
-
 }
 
 void GLResolver::DetectBackend()
@@ -444,7 +438,6 @@ void GLResolver::DetectBackend()
     LOG_DEBUG("[GLResolver] Current context: (unknown, will try generic loader)");
     m_backend = Backend::None;
 #endif // #ifdef __EMSCRIPTEN__
-
 }
 
 auto GLResolver::GladResolverThunk(const char* name) -> GLapiproc
@@ -491,9 +484,13 @@ auto GLResolver::LoadGlad() -> bool
         return true;
     }
     LOG_FATAL(std::string("[GLResolver] gladLoadGLES2() failed (backend=") +
-              BackendToString(m_backend) +
+              BackendToString(m_backend)
+#ifndef __EMSCRIPTEN__
+              +
               ", egl='" + m_eglLib.LoadedName() + "', gl='" + m_glLib.LoadedName() +
-              "', glx='" + m_glxLib.LoadedName() + "')");
+              "', glx='" + m_glxLib.LoadedName()
+#endif
+              + "')");
     return false;
 #endif
 }
@@ -508,7 +505,7 @@ auto GLResolver::ResolveUnlocked(const char* name,
 #else
                                  WglGetProcAddressFn wglGetProcAddressFn
 #endif
-                                 ) const -> GLapiproc
+) const -> GLapiproc
 {
     // 1) User resolver
     if (userResolver != nullptr)
