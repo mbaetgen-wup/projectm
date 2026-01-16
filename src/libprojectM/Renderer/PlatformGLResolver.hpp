@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
 
 namespace libprojectM
 {
@@ -63,7 +64,7 @@ using UserResolver = void* (*)(const char* name, void* userData);
  * @brief Cross-platform runtime GL/GLES resolver.
  *
  * This resolver:
- *  - Supports backends: CGL (macOS native), EGL (incl. GLES), GLX, WGL, WebGL, libGLVND, ANGLE, or a user supplied resolver.
+ *  - Supports backends: ANGLE, CGL (macOS native), EGL (incl. GLES), GLX, libGLVND, WGL, WebGL, or a user supplied resolver.
  *  - Supports platforms: Android, Emscripten, Linux, macOS, Windows.
  *  - Must be initialized after a GL/GLES context has been created and made current on the calling thread.
  *  - Detects the active backend by probing for a current context:
@@ -91,11 +92,6 @@ using UserResolver = void* (*)(const char* name, void* userData);
 class GLResolver
 {
 public:
-    /**
-     * Opaque handle for gl functions.
-     */
-    using GLapiproc = void*;
-
     GLResolver() = default;
     ~GLResolver();
 
@@ -136,7 +132,7 @@ public:
      * @param name Function name.
      * @return Procedure address or nullptr.
      */
-    auto GetProcAddress(const char* name) const -> GLapiproc;
+    auto GetProcAddress(const char* name) const -> void*;
 
     /**
      * @brief Resolves a function pointer by consulting all sources in priority order from a static context.
@@ -144,7 +140,7 @@ public:
      * @param name Function name.
      * @return Procedure address or nullptr.
      */
-    static auto GladResolverThunk(const char* name) -> GLapiproc;
+    static auto GladResolverThunk(const char* name) -> void*;
 
 private:
     void OpenNativeLibraries();
@@ -152,6 +148,7 @@ private:
     void DetectBackend();
     void SetBackendDefault();
     auto LoadGlad() -> bool;
+    auto HasCurrentContext(std::string& outReason) const -> bool;
 
     using EglProc = void (*)();
     using EglGetProcAddressFn = EglProc (*)(const char* name);
@@ -173,7 +170,7 @@ private:
 #else
                          WglGetProcAddressFn wglGetProcAddressFn
 #endif
-                         ) const -> GLapiproc;
+                         ) const -> void*;
 
     mutable std::mutex m_mutex;                   //!< Mutex to synchronize initialization and access.
     bool m_loaded{false};                         //!< True if the resolver is initialized.
