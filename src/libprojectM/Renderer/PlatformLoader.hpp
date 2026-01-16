@@ -137,6 +137,7 @@ public:
 
     inline void* GetSymbol(const char*) const { return nullptr; }
     inline void* Handle() const { return nullptr; }
+    inline void SetCloseOnDestruct(bool enabled) {}
     static inline void* FindGlobalSymbol(const char*) { return nullptr; }
 };
 
