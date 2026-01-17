@@ -1333,7 +1333,7 @@ auto GLResolver::ResolveUnlocked(const char* name,
     }
 
 #ifndef _WIN32
-#ifndef __ANDROID__
+#if !defined(__ANDROID__) && !defined(__APPLE__)
     if (allowGlxProvider && (backend == Backend::GLX || backend == Backend::None) && glxGetProcAddressFn != nullptr)
     {
         // GLX policy: only accept glXGetProcAddress* results for names that
