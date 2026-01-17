@@ -95,6 +95,10 @@ using LibHandle = HMODULE;
 using LibHandle = void*;
 #endif
 
+// -------------------------------------------------------------------------
+// Common (Windows / POSIX / Emscripten)
+// -------------------------------------------------------------------------
+
 inline auto TrimTrailingWhitespace(std::string& s) -> void
 {
     while (!s.empty())
@@ -108,10 +112,6 @@ inline auto TrimTrailingWhitespace(std::string& s) -> void
         break;
     }
 }
-
-// -------------------------------------------------------------------------
-// Common (Windows / POSIX / Emscripten)
-// -------------------------------------------------------------------------
 
 #if PLATFORM_LOADER_DIAGNOSTICS
 inline auto ReportFnPtrSizeMismatch(const char* where, std::size_t fnSize, std::size_t ptrSize) -> void
@@ -264,7 +264,7 @@ public:
     DynamicLibrary(const DynamicLibrary&) = delete;
     DynamicLibrary& operator=(const DynamicLibrary&) = delete;
 
-    inline auto Open(const char* const*) -> bool
+    inline auto Open(const char* const*, const std::string& reason) -> bool
     {
         return false;
     }

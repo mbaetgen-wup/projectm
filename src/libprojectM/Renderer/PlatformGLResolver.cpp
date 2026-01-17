@@ -203,9 +203,6 @@ auto PickCurrentBackend(const CurrentContextProbe& probe) -> Backend
 #endif
 }
 
-
-#ifndef __EMSCRIPTEN__
-
 auto HasSpaceSeparatedToken(const char* list, const char* token) -> bool
 {
     if (list == nullptr || token == nullptr)
@@ -269,6 +266,8 @@ auto IsLikelyExtensionName(const char* name) -> bool
     return false;
 }
 
+
+#ifndef __EMSCRIPTEN__
 
 /**
  * @brief Returns true if a GL/EGL symbol name is likely to be an extension entry point.
@@ -456,12 +455,16 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
     // Emit a concise diagnostics line for troubleshooting mixed-stack processes.
     {
         std::string diag = std::string("[GLResolver] Resolver policy: backend=\"") +
-                           BackendToString(m_backend) + "\"" +
+                           BackendToString(m_backend) + "\""
+#ifndef __EMSCRIPTEN__
+                           +
                            " egl=\"" + m_eglLib.LoadedName() + "\"" +
                            " gl=\"" + m_glLib.LoadedName() + "\"" +
                            " glx=\"" + m_glxLib.LoadedName() + "\"" +
                            " egl_get_proc=\"" + (m_eglGetProcAddress != nullptr ? "yes" : "no") + "\"" +
-                           " egl_all_proc=\"" + (m_eglGetAllProcAddresses ? "yes" : "no") + "\"";
+                           " egl_all_proc=\"" + (m_eglGetAllProcAddresses ? "yes" : "no") + "\""
+#endif
+        ;
 
 #ifdef _WIN32
         diag += std::string(" wgl_get_proc=\"") + (m_wglGetProcAddress != nullptr ? "yes" : "no") + "\"";
@@ -495,7 +498,6 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
         LOG_INFO(std::string("[GLResolver] GL Info: ") +
                  GLContextCheck::FormatCompactLine(glDetails.info) +
                  " backend=\"" + BackendToString(m_backend) + "\"" +
-                 " egl_get_all_proc_addresses=\"" + (m_eglGetAllProcAddresses ? "yes" : "no") + "\"" +
                  " user_resolver=\"" + (m_userResolver != nullptr ? "yes" : "no") + "\"");
 
         if (!glDetails.success)
@@ -777,6 +779,7 @@ auto GLResolver::GetProcAddress(const char* name) const -> void*
 void GLResolver::OpenNativeLibraries()
 {
     // Best-effort: macOS or minimal EGL setups may fail to open.
+    std::string reason;
 
 #ifdef _WIN32
     static constexpr std::array<const char*, 3> kEglNames = {"libEGL.dll", "EGL.dll", nullptr};
@@ -834,7 +837,7 @@ void GLResolver::OpenNativeLibraries()
         "libGLX.so.1", // GLVND GLX dispatcher (glXGetProcAddress*)
         "libGLX.so.0", // older GLVND soname
         nullptr};
-    std::string reason;
+    reason = "";
     const bool glxOpened = m_glxLib.Open(kGlxNames.data(), reason);
     if (!glxOpened)
     {
@@ -850,24 +853,22 @@ void GLResolver::OpenNativeLibraries()
     }
 
 #ifdef _WIN32
-    const char* const* glNames = nullptr;
 #if defined(USE_GLES)
-    glNames = kGlGlesNames.data();
+    const auto* glNames = kGlGlesNames.data();
 #else
     // Desktop OpenGL build: always prefer opengl32.dll.
     // Note: ANGLE typically exposes GLES via EGL, and is expected to be used with USE_GLES builds.
-    glNames = kGlDesktopNames.data();
+    const auto* glNames = kGlDesktopNames.data();
 #endif
     reason = "";
     const bool glOpened = m_glLib.Open(glNames, reason);
 #elif defined(__APPLE__)
-    const char* const* glNames = nullptr;
 #if defined(USE_GLES)
-    glNames = kGlGlesNames.data();
+    const auto* glNames = kGlGlesNames.data();
 #else
     // Desktop OpenGL build: always prefer OpenGL.framework.
     // EGL/GLES stacks (e.g. ANGLE) are expected to be used with USE_GLES builds.
-    glNames = kGlCglNames.data();
+    const auto* glNames = kGlCglNames.data();
 #endif
     reason = "";
     const bool glOpened = m_glLib.Open(glNames, reason);
@@ -1332,6 +1333,7 @@ auto GLResolver::ResolveUnlocked(const char* name,
     }
 
 #ifndef _WIN32
+#ifndef __ANDROID__
     if (allowGlxProvider && (backend == Backend::GLX || backend == Backend::None) && glxGetProcAddressFn != nullptr)
     {
         // GLX policy: only accept glXGetProcAddress* results for names that
@@ -1350,7 +1352,8 @@ auto GLResolver::ResolveUnlocked(const char* name,
             }
         }
     }
-#else
+#endif
+#else // #ifndef _WIN32
     if (allowWglProvider && (backend == Backend::WGL || backend == Backend::None) && wglGetProcAddressFn != nullptr)
     {
         PROC proc = wglGetProcAddressFn(name);
