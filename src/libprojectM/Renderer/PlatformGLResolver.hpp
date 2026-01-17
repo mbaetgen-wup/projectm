@@ -1,5 +1,6 @@
 #pragma once
 
+#include "PlatformGLContextCheck.hpp"
 #include "PlatformLoader.hpp"
 
 #include <condition_variable>
@@ -41,7 +42,7 @@ enum class Backend : std::uint8_t
     WGL = 3,
 
     /**
-     * WegGl proc resolver (Emscripten only).
+     * WebGL proc resolver (Emscripten only).
      */
     WebGL = 4,
 
@@ -63,22 +64,39 @@ using UserResolver = void* (*)(const char* name, void* userData);
  * @brief Cross-platform runtime GL/GLES resolver.
  *
  * This resolver:
- *  - Supports backends: ANGLE, CGL (macOS native), EGL (incl. GLES), GLX, libGLVND, WGL, WebGL, or a user supplied resolver.
+ *
+ *  - Supports backends and wrappers: ANGLE, CGL, EGL (incl. GLES), GLX, libGLVND, WGL, WebGL, or a user supplied resolver.
+ *
  *  - Supports platforms: Android, Emscripten, Linux, macOS, Windows.
+ *
+*   - Uses a compile-time decision to select one of the GL APIs:
+ *    - When USE_GLES is defined, this resolver loads OpenGL ES entrypoints via gladLoadGLES2()
+ *      and requires a current OpenGL ES/WebGL/EGL+GLES context.
+ *    - Otherwise, it loads desktop OpenGL entrypoints via gladLoadGL() and requires a current
+ *      desktop OpenGL context.
+ *    - ANGLE typically exposes GLES via EGL, so it is expected to be used with ENABLE_GLES=ON builds.
+ *
  *  - Must be initialized after a GL/GLES context has been created and made current on the calling thread.
+ *
  *  - Detects the active backend by probing for a current context:
  *      - EGL via eglGetCurrentContext
- *      - GLX via glXGetCurrentContext*
+ *      - GLX via glXGetCurrentContext
  *      - WGL via wglGetCurrentContext
  *      - macOS native falls back to CGL/NSOpenGL (no provider GetProcAddress)
+ *
  *  - Uses GLAD2 non-MX entrypoints (gladLoadGL / gladLoadGLES2) with a single universal resolver.
+ *
  *  - Supports libGLVND dispatch on Linux (libOpenGL.so + libGLX.so).
+ *
  *  - Supports ANGLE when libEGL/libGLESv2 are present.
  *
  *  - Resolves symbols in the following order (native GL / GLES):
  *      1) User resolver callback (if provided)
  *      2) Platform provider:
  *           - eglGetProcAddress (EGL / ANGLE)
+ *             (Note: on older EGL implementations/spec interpretations, eglGetProcAddress
+ *              may not return addresses for all core functions; this resolver therefore
+ *              also falls back to direct exports from loaded GL/GLES libraries.)
  *           - glXGetProcAddress / glXGetProcAddressARB (GLX / GLVND)
  *           - wglGetProcAddress (WGL)
  *      3) Global symbol table (RTLD_DEFAULT / main module)
@@ -87,12 +105,145 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *  - Resolves symbols in the following order (Emscripten):
  *      1) User resolver callback (if provided)
  *      2) emscripten_webgl_get_proc_address / emscripten_webgl2_get_proc_address
+ *
+ * @note On Emscripten/WebGL, procedure lookup support depends on the toolchain and export settings.
+ *       (todo) Some entrypoints may not be discoverable via *_get_proc_address and may require static linkage
+ *       and/or explicit exports in the build configuration.
+ *
+ *  ## Loader Overview
+ *
+ *  GLResolver::Initialize(userResolver?, userData?)
+ *    |
+ *   #ifndef __EMSCRIPTEN__
+ *    |
+ *    |-- OpenNativeLibraries()
+ *    |     |
+ *    |     +-- try open EGL library (best-effort)
+ *    |     |      Windows:  libEGL.dll | EGL.dll
+ *    |     |      macOS:    libEGL.dylib | libEGL.1.dylib | EGL
+ *    |     |      Linux:    libEGL.so.1 | libEGL.so
+ *    |     |
+ *    |     +-- try open GL library (best-effort)
+ *    |     |      Windows:  opengl32.dll
+ *    |     |      macOS:    /System/.../OpenGL.framework/OpenGL
+ *    |     |      Linux:    libGL.so.1 | libGL.so.0 | libOpenGL.so.1 | libOpenGL.so.0 | libGL.so
+ *    |     |
+ *    |     +-- (Linux only) try open GLX library (best-effort)
+ *    |            libGLX.so.1 | libGLX.so.0
+ *    |
+ *    |-- ResolveProviderFunctions()
+ *    |     |
+ *    |     +-- EGL:
+ *    |     |     - resolve eglGetProcAddress (from EGL lib or global symbols)
+ *    |     |     - resolve eglGetCurrentContext (for probing)
+ *    |     |     - detect EGL_KHR_get_all_proc_addresses /
+ *    |     |              EGL_KHR_client_get_all_proc_addresses via eglQueryString
+ *    |     |
+ *    |     +-- GLX (Linux/Unix):
+ *    |     |     - resolve glXGetProcAddressARB/glXGetProcAddress
+ *    |     |
+ *    |     +-- WGL (Windows):
+ *    |           - resolve wglGetProcAddress
+ *    |
+ *    |     +-- CGL (macOS):
+ *    |           - no provider functions
+ * #endif
+ *    |
+ *    |-- Precondition: HasCurrentContext()
+ *    |     |
+ *    |     +-- ProbeCurrentContext() checks:
+ *    |            EGL: eglGetCurrentContext() != nullptr                           ? (Android/Linux/macOS/Windows)
+ *    |            GLX: glXGetCurrentContext() != nullptr                           ? (Linux, not Android/macOS/Windows)
+ *    |            WGL: wglGetCurrentContext() != nullptr                           ? (Windows)
+ *    |            CGL: CGLGetCurrentContext() != nullptr                           ? (macOS)
+ *    |            WebGL: emscripten_webgl_get_current_context() != nullptr         ? (Emscripten)
+ *    |
+ *    |-- DetectBackend()
+ *    |     |
+ *    |     +-- PickCurrentBackend priority:
+ *    |            if EGL   current -> Backend::EGL          (Android/Linux/macOS/Windows)
+ *    |            if WGL   current -> Backend::WGL          (Windows)
+ *    |            if CGL   current -> Backend::CGL          (macOS)
+ *    |            if GLX   current -> Backend::GLX          (Linux, not Android)
+ *    |            if WebGL current -> Backend::WebGL        (Emscripten)
+ *    |            else             -> Backend::None         (Unknown)
+ *    |
+ *    |-- gladLoadGL( GladBridgeResolverThunk )
+ *    |        (GLAD calls back into GLResolver::GetProcAddress)
+ *    |
+ *    |-- SetBackendDefault()   (only if backend still None after load)
+ *    |     |
+ *    |     +-- macOS special-case:
+ *    |           if no EGL provider available -> default Backend::CGL
+ *    |     +-- otherwise: leave as None unless unambiguous
+ *    |
+ *    |-- CheckGLRequirementsUnlocked()
+ *    |     |
+ *    |     +-- requires: OpenGL >= 3.3
+ *    |
+ *    +-- if ready:
+ *          SOIL_GL_SetResolver(&GLResolver::GladResolverThunk)
+ *          SOIL_GL_Init()
+
+ *  ## Resolver Overview
+ *
+ * GLResolver::GetProcAddress(name)
+ *    |
+ *    |-- Provider gating:
+ *    |     if backend == None:
+ *    |         probe current context *now* and allow only matching provider(s)
+ *    |         (prevents cross-stack pointer returns in mixed-stack processes)
+ *    |     else:
+ *    |         allow only provider that matches backend
+ *    |
+ *    +--> (1) User resolver callback
+ *    |
+ *    +--> (2) WebGL providers [Emscripten only] --> DONE
+ *    |   --OR--
+ *    +--> (2) Provider GetProcAddress (backend-aware) [not Emscripten]:
+ *    |      |
+ *    |      +-- EGL path (if allowed, and backend is EGL or None):
+ *    |      |     if eglGetAllProcAddresses == true
+ *    |      |         OR name looks like an extension (suffix ARB/EXT/KHR/OES/NV/...):
+ *    |      |            try eglGetProcAddress(name)
+ *    |      |
+ *    |      +-- GLX path (Linux, if allowed, and backend is GLX or None):
+ *    |      |     POLICY: only call glXGetProcAddress* if:
+ *    |      |         - name starts with "glX"  OR
+ *    |      |         - name looks like an extension (ARB/EXT/KHR/OES/...)
+ *    |      |
+ *    |      +-- WGL path (Windows, if allowed, and backend is WGL or None):
+ *    |            try wglGetProcAddress(name)
+ *    |            if not sentinel {1,2,3,-1}
+ *    |
+ *    +--> (3) Global symbol table lookup (outside ResolveUnlocked)
+ *    |      |
+ *    |      +-- POSIX: dlsym(RTLD_DEFAULT, name)
+ *    |      +-- Windows: GetProcAddress(main exe), then known EGL/GLES modules, then opengl32.dll module
+ *    |
+ *    +--> (4) Direct library exports (if libraries were opened)
+ *    |      |
+ *    |      +-- m_eglLib.GetSymbol(name)
+ *    |      +-- m_glLib.GetSymbol(name)
+ *    |      +-- m_glxLib.GetSymbol(name)   (Linux)
+ *    |
+ *
+ *
+ *
  */
 class GLResolver
 {
 public:
     GLResolver() = default;
-    ~GLResolver();
+
+    /**
+     * Process-lifetime singleton: destructor runs during process teardown.
+     * Do not call into GL or unload GL driver libraries here:
+     *  - GL context may already be destroyed on this thread.
+     *  - Other threads may still be running.
+     * OS will reclaim mappings on exit.
+     */
+    ~GLResolver() = default;
 
     GLResolver(const GLResolver&) = delete;
     auto operator=(const GLResolver&) -> GLResolver& = delete;
@@ -106,8 +257,15 @@ public:
 
     /**
      * @brief Initializes the resolver.
-     * This method has to be called at least once for each resolver instance before it is used.
-     * May be called multiple times, initialization is done if needed only.
+     *
+     * This method must be called at least once before GetProcAddress() is used.
+     *
+     * Thread-safety: Initialize() is internally synchronized. Intended usage is to initialize
+     * once during startup before any resolution occurs. GetProcAddress() assumes
+     * initialization has completed successfully (per API contract) and does not wait
+     * for an in-flight Initialize() call.
+     *
+     * May be called multiple times; initialization work is performed only when needed.
      *
      * @param resolver Optional user resolver callback.
      * @param userData Optional user pointer passed to resolver.
@@ -121,16 +279,21 @@ public:
     auto IsLoaded() const -> bool;
 
     /**
-     * @brief Returns the currently detected backend.
+     * @brief Returns the backend detected during the last successful Initialize() call.
+     *
      */
     auto CurrentBackend() const -> Backend;
 
     /**
      * @brief Resolves a function pointer by consulting all sources in priority order.
      *
-     * @note On some GLX implementations, glXGetProcAddress* may return a non-null pointer even
-     * for unknown symbols. Treat the result as best-effort and validate availability via
-     * the appropriate version/extension queries.
+     * @note Intended usage assumes Initialize() has completed successfully before this is called.
+     *
+     * @note GLX policy: some implementations (notably Mesa/GLVND setups) may return a non-null
+     *       pointer for unknown names from glXGetProcAddress*. To reduce the risk of calling
+     *       invalid stubs, this resolver only consults glXGetProcAddress* for GLX entry points
+     *       (glX*) and extension-style symbols. Desktop core GL symbols are resolved via direct
+     *       exports (dlsym / libOpenGL / libGL) through the later lookup path.
      *
      * @param name Function name.
      * @return Procedure address or nullptr.
@@ -146,15 +309,18 @@ public:
     static auto GladResolverThunk(const char* name) -> void*;
 
 private:
-    void OpenNativeLibraries();
-    void ResolveProviderFunctions();
-    void DetectBackend();
-    void SetBackendDefault();
-    auto LoadGlad() -> bool;
+    auto OpenNativeLibraries() -> void;
+    auto ResolveProviderFunctions() -> void;
+    auto DetectBackend() -> void;
+    auto SetBackendDefault() -> void;
+    auto CheckGLRequirementsUnlocked() -> GLContextCheckResult;
+    auto LoadGladUnlocked() -> bool;
     auto HasCurrentContext(std::string& outReason) const -> bool;
 
-    using EglProc = void (*)();
-    using EglGetProcAddressFn = EglProc (*)(const char* name);
+    using EglProc = void (PLATFORM_EGLAPIENTRY*)();
+    using EglGetProcAddressFn = EglProc (PLATFORM_EGLAPIENTRY*)(const char* name);
+
+    using GetCurrentContextFn = void* (PLATFORM_EGLAPIENTRY*)();
 
 #ifndef _WIN32
     /* glXGetProcAddress/glXGetProcAddressARB return a function pointer. */
@@ -168,31 +334,40 @@ private:
                          void* userData,
                          Backend backend,
                          EglGetProcAddressFn eglGetProcAddressFn,
+                         bool eglGetAllProcAddresses,
+                         bool allowEglProvider,
 #ifndef _WIN32
-                         GlxGetProcAddressFn glxGetProcAddressFn
+                         GlxGetProcAddressFn glxGetProcAddressFn,
+                         bool allowGlxProvider
 #else
-                         WglGetProcAddressFn wglGetProcAddressFn
+                         WglGetProcAddressFn wglGetProcAddressFn,
+                         bool allowWglProvider
 #endif
                          ) const -> void*;
 
-    mutable std::mutex m_mutex;                   //!< Mutex to synchronize initialization and access.
-    bool m_loaded{false};                         //!< True if the resolver is initialized.
-    bool m_initializing{false};                   //!< True while an Initialize() attempt is in-flight.
-    mutable std::condition_variable m_initCv;     //!< Signals completion of Initialize()/Shutdown().
-    Backend m_backend{ Backend::None };           //!< Detected GL backend.
+    mutable std::mutex m_mutex;                             //!< Mutex to synchronize initialization and access.
+    bool m_loaded{false};                                   //!< True if the resolver is initialized.
+    bool m_initializing{false};                             //!< True while an Initialize() attempt is in-flight.
+    mutable std::condition_variable m_initCv;               //!< Signals completion of Initialize()/Shutdown().
+    Backend m_backend{ Backend::None };                     //!< Detected GL backend.
 
-    UserResolver m_userResolver{nullptr};         //!< User provided function resolver. Optional, may be null.
-    void* m_userData{nullptr};                    //!< User data to pass to user provided function resolver.
+    UserResolver m_userResolver{nullptr};                   //!< User provided function resolver. Optional, may be null.
+    void* m_userData{nullptr};                              //!< User data to pass to user provided function resolver.
 
-    DynamicLibrary m_eglLib;                      //!< EGL library handle. Optional, may be empty.
-    DynamicLibrary m_glLib;                       //!< GL library handle. Optional, may be empty.
-    DynamicLibrary m_glxLib;                      //!< GLX library handle. Optional, may be empty.
+    DynamicLibrary m_eglLib;                                //!< EGL library handle. Optional, may be empty.
+    DynamicLibrary m_glLib;                                 //!< GL library handle. Optional, may be empty.
+    DynamicLibrary m_glxLib;                                //!< GLX library handle. Optional, may be empty.
 
-    EglGetProcAddressFn m_eglGetProcAddress{nullptr}; //!< eglGetProcAddress handle.
+    EglGetProcAddressFn m_eglGetProcAddress{nullptr};       //!< eglGetProcAddress handle.
+    bool m_eglGetAllProcAddresses{false};                   //!< True if EGL_KHR_get_all_proc_addresses (or client variant) is advertised.
+    GetCurrentContextFn m_eglGetCurrentContext{nullptr};    //!< eglGetCurrentContext handle (for backend probing).
+#if defined(__APPLE__) && !defined(__EMSCRIPTEN__) && !defined(_WIN32)
+    GetCurrentContextFn m_cglGetCurrentContext{nullptr};    //!< CGLGetCurrentContext handle (for backend probing).
+#endif
 #ifndef _WIN32
-    GlxGetProcAddressFn m_glxGetProcAddress{nullptr}; //!< glXGetProcAddress* handle.
+    GlxGetProcAddressFn m_glxGetProcAddress{nullptr};       //!< glXGetProcAddress* handle.
 #else
-    WglGetProcAddressFn m_wglGetProcAddress{nullptr}; //!< wglGetProcAddress handle.
+    WglGetProcAddressFn m_wglGetProcAddress{nullptr};       //!< wglGetProcAddress handle.
 #endif
 };
 

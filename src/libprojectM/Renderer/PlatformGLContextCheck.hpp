@@ -56,7 +56,7 @@ struct GLContextCheckResult
 };
 
 /**
- * @brief GL context checker with builder pattern.
+ * @brief GL context requirement verification check using a builder pattern.
  */
 class GLContextCheck final
 {
@@ -89,6 +89,9 @@ public:
 
         /**
          * @brief Performs the check and returns a filled result struct.
+         *
+         * @note Precondition: a GL/GLES context must be current on the calling thread and the
+         * required entry points (at minimum glGetString/glGetError) must be callable.
          */
         [[nodiscard]] auto Check() const -> GLContextCheckResult;
 
@@ -99,7 +102,7 @@ public:
     /**
      * @brief Format gl infos as a compact summary of the result.
      */
-    static auto FormatCompactLine(const GLContextInfo& info) -> std::string;
+    [[nodiscard]] static auto FormatCompactLine(const GLContextInfo& info) -> std::string;
 
 };
 

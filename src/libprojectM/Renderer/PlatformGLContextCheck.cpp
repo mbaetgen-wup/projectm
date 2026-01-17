@@ -312,10 +312,24 @@ auto QueryInfo(GLContextInfo& info, std::string& reason) -> bool
     {
         if (!ParseVersionString(ver, isGLES, info.major, info.minor))
         {
-            reason = "Unable to determine GL version";
+            reason = std::string("Unable to determine GL version from GL_VERSION=\"") + SanitizeString(ver) + "\"";
             return false;
         }
     }
+
+#if defined(__EMSCRIPTEN__)
+    // Emscripten can be configured to return WebGL-format version strings (e.g. "WebGL 2.0")
+    // instead of ES-format strings. WebGL 2 corresponds closely to an OpenGL ES 3.0-class API.
+    // If version parsing yields 2.0 from a WebGL 2.0 string, lift it to 3.0 for minimum-version checks.
+    if (std::strstr(ver, "WebGL 2") != nullptr)
+    {
+        if (info.major < 3)
+        {
+            info.major = 3;
+            info.minor = 0;
+        }
+    }
+#endif
 
     info.profile = ProfileString();
     info.flags = FlagsString();

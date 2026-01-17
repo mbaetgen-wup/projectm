@@ -1,24 +1,90 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
 
 #ifndef __EMSCRIPTEN__
 #ifdef _WIN32
-    #include <windows.h>
+#include <windows.h>
+
+// -------------------------------------------------------------------------
+// Windows DLL safe-search flags
+// -------------------------------------------------------------------------
+// Some toolchains/Windows SDKs may not define these constants even though
+// the OS loader supports them (Windows 7 w/ KB2533623+, Win8+). We define
+// them locally when absent to allow using LoadLibraryEx with safe search.
+#ifndef LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR
+#define LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR 0x00000100
+#endif
+#ifndef LOAD_LIBRARY_SEARCH_APPLICATION_DIR
+#define LOAD_LIBRARY_SEARCH_APPLICATION_DIR 0x00000200
+#endif
+#ifndef LOAD_LIBRARY_SEARCH_USER_DIRS
+#define LOAD_LIBRARY_SEARCH_USER_DIRS 0x00000400
+#endif
+#ifndef LOAD_LIBRARY_SEARCH_SYSTEM32
+#define LOAD_LIBRARY_SEARCH_SYSTEM32 0x00000800
+#endif
+#ifndef LOAD_LIBRARY_SEARCH_DEFAULT_DIRS
+#define LOAD_LIBRARY_SEARCH_DEFAULT_DIRS 0x00001000
+#endif
+
+// -------------------------------------------------------------------------
+// Optional legacy DLL search fallback
+// -------------------------------------------------------------------------
+//
+// If the OS loader does not support LOAD_LIBRARY_SEARCH_* flags (ERROR_INVALID_PARAMETER),
+// this loader tries to load from explicit safe locations (application directory and
+// System32 for known system DLLs).
+//
+// As a last resort, some applications may still want to fall back to LoadLibrary(name)
+// (which can consult legacy search paths such as the process current working directory).
+// This is disabled by default for security hardening.
+//
+// Define PLATFORM_ALLOW_UNSAFE_DLL_SEARCH=1 to re-enable the legacy fallback.
+#ifndef PLATFORM_ALLOW_UNSAFE_DLL_SEARCH
+#define PLATFORM_ALLOW_UNSAFE_DLL_SEARCH 0
+#endif
 #else
-    #include <dlfcn.h>
+#include <dlfcn.h>
 #endif
 #endif
 
-namespace libprojectM
-{
-namespace Renderer
-{
-namespace Platform
-{
+// -------------------------------------------------------------------------
+// Minimal EGL calling-convention support
+// -------------------------------------------------------------------------
+//
+// We avoid including EGL headers in this loader. On 32-bit Windows, EGL entry
+// points use the stdcall calling convention (via EGLAPIENTRY/KHRONOS_APIENTRY).
+// On 64-bit Windows the calling convention is ignored.
+//
+// This macro is used in our local EGL function pointer typedefs to ensure we
+// call into the provider (ANGLE / driver EGL) using the correct ABI.
+#if defined(_WIN32) && !defined(_WIN64)
+#define PLATFORM_EGLAPIENTRY __stdcall
+#else
+#define PLATFORM_EGLAPIENTRY
+#endif
+
+// -------------------------------------------------------------------------
+// Optional loader diagnostics
+// -------------------------------------------------------------------------
+//
+// When enabled, the loader prints best-effort diagnostics for unusual ABI
+// situations (e.g., platforms where data pointers and function pointers have
+// different representations/sizes). Disabled by default to avoid noisy output
+// in production applications.
+#ifndef PLATFORM_LOADER_DIAGNOSTICS
+#define PLATFORM_LOADER_DIAGNOSTICS 0
+#endif
+
+namespace libprojectM {
+namespace Renderer {
+namespace Platform {
 
 /**
  * @brief Platform library handle type.
@@ -29,17 +95,43 @@ using LibHandle = HMODULE;
 using LibHandle = void*;
 #endif
 
+inline auto TrimTrailingWhitespace(std::string& s) -> void
+{
+    while (!s.empty())
+    {
+        const char c = s.back();
+        if (c == '\r' || c == '\n' || c == ' ' || c == '\t')
+        {
+            s.pop_back();
+            continue;
+        }
+        break;
+    }
+}
+
 // -------------------------------------------------------------------------
 // Common (Windows / POSIX / Emscripten)
 // -------------------------------------------------------------------------
 
+#if PLATFORM_LOADER_DIAGNOSTICS
+inline auto ReportFnPtrSizeMismatch(const char* where, std::size_t fnSize, std::size_t ptrSize) -> void
+{
+    std::fprintf(stderr, "[PlatformLoader] %s: sizeof(Fn)=%zu sizeof(void*)=%zu; cannot convert symbol/function pointer\n",
+                 (where != nullptr ? where : "(unknown)"),
+                 static_cast<std::size_t>(fnSize),
+                 static_cast<std::size_t>(ptrSize));
+}
+#endif
+
 /**
- * @brief Converts a symbol pointer (void*) into a function pointer type without UB.
+ * @brief Converts a symbol pointer (void*) into a function pointer type (best-effort).
  *
- * dlsym/GetProcAddress return data pointers (void* / FARPROC). Converting those to function
- * pointers via reinterpret_cast is technically undefined behavior in C++.
+ * dlsym/GetProcAddress return untyped procedure addresses (void* on POSIX, FARPROC on Windows). Converting those to function
+ * pointers via reinterpret_cast is not guaranteed to be portable in ISO C++.
  *
- * This helper uses memcpy to transfer the representation into a function pointer type.
+ * This helper uses memcpy to transfer the representation into a function pointer type. This is widely supported on common
+ * platforms/ABIs (and is compatible with typical POSIX dlsym usage), but it is still a best-effort technique rather than a strict
+ * ISO C++ guarantee.
  * If the platform uses different sizes for data pointers and function pointers, the
  * conversion fails and returns nullptr.
  *
@@ -47,7 +139,7 @@ using LibHandle = void*;
  * @param symbol Symbol pointer as void*.
  * @return Function pointer or nullptr.
  */
-template <typename Fn>
+template<typename Fn>
 auto SymbolToFunction(void* symbol) -> Fn
 {
     if (symbol == nullptr)
@@ -57,6 +149,9 @@ auto SymbolToFunction(void* symbol) -> Fn
 
     if (sizeof(Fn) != sizeof(void*))
     {
+#if PLATFORM_LOADER_DIAGNOSTICS
+        ReportFnPtrSizeMismatch("SymbolToFunction", sizeof(Fn), sizeof(void*));
+#endif
         return nullptr;
     }
 
@@ -66,7 +161,7 @@ auto SymbolToFunction(void* symbol) -> Fn
 }
 
 /**
- * @brief Converts a function pointer into a symbol pointer representation without UB.
+ * @brief Converts a function pointer into a symbol pointer representation (best-effort).
  *
  * The inverse of SymbolToFunction(). This is used at API boundaries where legacy
  * interfaces represent procedure addresses as void*.
@@ -75,7 +170,7 @@ auto SymbolToFunction(void* symbol) -> Fn
  * @param func Function pointer.
  * @return Symbol pointer as void* or nullptr if not representable.
  */
-template <typename Fn>
+template<typename Fn>
 auto FunctionToSymbol(Fn func) -> void*
 {
     if (func == nullptr)
@@ -85,6 +180,9 @@ auto FunctionToSymbol(Fn func) -> void*
 
     if (sizeof(Fn) != sizeof(void*))
     {
+#if PLATFORM_LOADER_DIAGNOSTICS
+        ReportFnPtrSizeMismatch("FunctionToSymbol", sizeof(Fn), sizeof(void*));
+#endif
         return nullptr;
     }
 
@@ -99,7 +197,7 @@ auto FunctionToSymbol(Fn func) -> void*
  * Useful for validating platform-specific sentinel values (e.g. Windows WGL).
  * Returns 0 if the conversion is not representable.
  */
-template <typename Fn>
+template<typename Fn>
 auto FunctionToInteger(Fn func) -> std::uintptr_t
 {
     if (func == nullptr)
@@ -109,6 +207,14 @@ auto FunctionToInteger(Fn func) -> std::uintptr_t
 
     if (sizeof(Fn) != sizeof(void*))
     {
+#if PLATFORM_LOADER_DIAGNOSTICS
+        ReportFnPtrSizeMismatch("FunctionToInteger", sizeof(Fn), sizeof(void*));
+#endif
+        return 0;
+    }
+
+    if (sizeof(std::uintptr_t) != sizeof(void*))
+    {
         return 0;
     }
 
@@ -116,6 +222,33 @@ auto FunctionToInteger(Fn func) -> std::uintptr_t
     std::memcpy(&value, &func, sizeof(std::uintptr_t));
     return value;
 }
+
+
+#ifdef _WIN32
+/**
+ * @brief Converts a Windows FARPROC into the generic symbol representation (void*) (best-effort).
+ *
+ * Windows GetProcAddress returns a function pointer type (FARPROC). To avoid relying on a direct
+ * reinterpret_cast between function pointers and object pointers, this helper copies the bit pattern
+ * into a void* storage location when the sizes match.
+ */
+inline auto WinProcToSymbol(FARPROC proc) noexcept -> void*
+{
+    if (proc == nullptr)
+    {
+        return nullptr;
+    }
+
+    if (sizeof(proc) != sizeof(void*))
+    {
+        return nullptr;
+    }
+
+    void* sym = nullptr;
+    std::memcpy(&sym, &proc, sizeof(void*));
+    return sym;
+}
+#endif
 
 #ifdef __EMSCRIPTEN__
 
@@ -131,19 +264,50 @@ public:
     DynamicLibrary(const DynamicLibrary&) = delete;
     DynamicLibrary& operator=(const DynamicLibrary&) = delete;
 
-    inline bool Open(const char* const*) { return false; }
-    inline void Close() {}
-    inline bool IsOpen() const { return false; }
+    inline auto Open(const char* const*) -> bool
+    {
+        return false;
+    }
 
-    inline void* GetSymbol(const char*) const { return nullptr; }
-    inline void* Handle() const { return nullptr; }
-    inline void SetCloseOnDestruct(bool enabled) {}
-    static inline void* FindGlobalSymbol(const char*) { return nullptr; }
+    inline auto Close() -> void
+    {
+    }
+
+    inline auto IsOpen() const -> bool
+    {
+        return false;
+    }
+
+    inline auto GetSymbol(const char*) const -> void*
+    {
+        return nullptr;
+    }
+
+    inline auto Handle() const -> void*
+    {
+        return nullptr;
+    }
+
+    inline auto SetCloseOnDestruct(bool enabled) -> void
+    {
+    }
+
+    static inline auto FindGlobalSymbol(const char*) -> void*
+    {
+        return nullptr;
+    }
 };
 
-inline auto IsCurrentEgl(const DynamicLibrary&) -> bool { return false; }
+inline auto IsCurrentEgl(const DynamicLibrary&) -> bool
+{
+    return false;
+}
+
 #ifndef _WIN32
-inline auto IsCurrentGlx(const DynamicLibrary&) -> bool { return false; }
+inline auto IsCurrentGlx(const DynamicLibrary&) -> bool
+{
+    return false;
+}
 #endif
 
 #else // #ifdef __EMSCRIPTEN__
@@ -152,21 +316,12 @@ inline auto IsCurrentGlx(const DynamicLibrary&) -> bool { return false; }
 // -------------------------------------------------------------------------
 
 /**
- * @brief RAII wrapper around a dynamic library handle.
+ * @brief Wrapper around a dynamic library handle.
  */
 class DynamicLibrary
 {
 public:
     DynamicLibrary() = default;
-
-    /**
-     * @brief Constructs a DynamicLibrary by attempting to open the first available library name.
-     * @param names Null-terminated list of candidate library names.
-     */
-    explicit DynamicLibrary(const char* const* names)
-    {
-        Open(names);
-    }
 
     ~DynamicLibrary()
     {
@@ -182,8 +337,10 @@ public:
     DynamicLibrary(DynamicLibrary&& other) noexcept
         : m_closeOnDestruct(other.m_closeOnDestruct)
         , m_handle(other.m_handle)
+        , m_loadedName(std::move(other.m_loadedName))
     {
         other.m_handle = nullptr;
+        other.m_loadedName.clear();
     }
 
     auto operator=(DynamicLibrary&& other) noexcept -> DynamicLibrary&
@@ -193,7 +350,9 @@ public:
             Close();
             m_closeOnDestruct = other.m_closeOnDestruct;
             m_handle = other.m_handle;
+            m_loadedName = std::move(other.m_loadedName);
             other.m_handle = nullptr;
+            other.m_loadedName.clear();
         }
         return *this;
     }
@@ -201,16 +360,17 @@ public:
     /**
      * @brief Attempts to open the first library from the given candidate list.
      * @param names Null-terminated list of candidate library names.
+     * @param reason User error message.
      *
      * @return true if a library was opened, false otherwise.
      */
-    auto Open(const char* const* names) -> bool
+    auto Open(const char* const* names, std::string& reason) -> bool
     {
         Close();
 
         if (names == nullptr)
         {
-            m_lastError = "No library names provided";
+            reason = "No library names provided";
             return false;
         }
 
@@ -223,37 +383,147 @@ public:
             }
 
 #ifdef _WIN32
-            ::SetLastError(0);
-#if defined(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS)
-            // Prefer the safer default DLL search order when loading by bare name.
-            // Fall back to LoadLibraryA for compatibility (e.g., app-local ANGLE deployments).
+            // DLL loading policy:
+            //  - Prefer LoadLibraryExA with LOAD_LIBRARY_SEARCH_* flags to avoid CWD/PATH hijacking.
+            //  - If the OS loader doesn't support the flags (ERROR_INVALID_PARAMETER), fall back to:
+            //      * application directory (explicit full path based on the running module)
+            //      * System32 (for known system DLLs like opengl32.dll)
+            //      * optionally, legacy LoadLibraryA(name) (disabled by default; see PLATFORM_ALLOW_UNSAFE_DLL_SEARCH).
+            //
+            // NOTE: We intentionally do not call SetDefaultDllDirectories() here. It changes
+            // the process-wide DLL search behavior and can surprise a host application.
+            // Instead, we rely on per-call LoadLibraryExA LOAD_LIBRARY_SEARCH_* flags when available.
+
+            auto buildAppDirPath = [](const char* dllName) -> std::string {
+                char exePath[MAX_PATH] = {};
+                const DWORD n = ::GetModuleFileNameA(nullptr, exePath, static_cast<DWORD>(sizeof(exePath)));
+                if (n == 0u || n >= sizeof(exePath))
+                {
+                    return std::string();
+                }
+
+                // Strip to directory.
+                for (DWORD i = n; i > 0u; --i)
+                {
+                    const char c = exePath[i - 1u];
+                    if (c == '\\' || c == '/')
+                    {
+                        exePath[i] = '\0';
+                        break;
+                    }
+                }
+
+                std::string full(exePath);
+                full += dllName;
+                return full;
+            };
+
+            auto buildSystem32Path = [](const char* dllName) -> std::string {
+                char sysDir[MAX_PATH] = {};
+                const UINT n = ::GetSystemDirectoryA(sysDir, static_cast<UINT>(sizeof(sysDir)));
+                if (n == 0u || n >= sizeof(sysDir))
+                {
+                    return std::string();
+                }
+                std::string full(sysDir);
+                full += "\\";
+                full += dllName;
+                return full;
+            };
+
+            auto tryLoadEx = [&](const char* dllName, DWORD flags) -> HMODULE {
+                ::SetLastError(0);
+                return ::LoadLibraryExA(dllName, nullptr, flags);
+            };
+
+            auto tryLoad = [&](const char* dllName) -> HMODULE {
+                ::SetLastError(0);
+                return ::LoadLibraryA(dllName);
+            };
+
+            // Detect whether the name contains a path. If so, LoadLibraryA is already safe (absolute/relative path is explicit).
             HMODULE handle = nullptr;
             const bool hasPath = (std::strchr(name, '\\') != nullptr) || (std::strchr(name, '/') != nullptr);
+
             if (hasPath)
             {
-                handle = ::LoadLibraryA(name);
+                // Prefer safe search flags for dependency resolution relative to the DLL location.
+                handle = tryLoadEx(name, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+                if (handle == nullptr && ::GetLastError() == ERROR_INVALID_PARAMETER)
+                {
+                    // Older OS loader: explicit path is already unambiguous.
+                    handle = tryLoad(name);
+                }
             }
             else
             {
-                handle = ::LoadLibraryExA(name, nullptr, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+                // Bare name: avoid CWD/PATH when possible.
+                //
+                // NOTE: When loading app-bundled DLLs (e.g. ANGLE's libEGL/libGLESv2), loading by
+                // explicit full path improves dependency resolution by allowing the loader to search
+                // the DLL's directory for its dependent DLLs (LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR).
+                // This keeps the search path restricted without changing process-wide state.
+                const std::string appFull = buildAppDirPath(name);
+                if (!appFull.empty())
+                {
+                    handle = tryLoadEx(appFull.c_str(), LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+                    if (handle == nullptr && ::GetLastError() == ERROR_INVALID_PARAMETER)
+                    {
+                        // Older OS loader: explicit path is already unambiguous.
+                        handle = tryLoad(appFull.c_str());
+                    }
+                }
+
                 if (handle == nullptr)
                 {
-                    handle = ::LoadLibraryA(name);
+                    handle = tryLoadEx(name, LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+                }
+
+                if (handle == nullptr && ::GetLastError() == ERROR_INVALID_PARAMETER)
+                {
+                    // Flags unsupported: best-effort manual safe search.
+                    // 1) Application directory
+                    if (handle == nullptr && !appFull.empty())
+                    {
+                        handle = tryLoad(appFull.c_str());
+                    }
+
+                    // 2) System32 for known system DLLs
+                    if (handle == nullptr && _stricmp(name, "opengl32.dll") == 0)
+                    {
+                        const std::string sysFull = buildSystem32Path("opengl32.dll");
+                        if (!sysFull.empty())
+                        {
+                            handle = tryLoad(sysFull.c_str());
+                        }
+                    }
+
+                    // 3) Legacy fallback (disabled by default).
+                    //
+                    // NOTE: LoadLibrary(name) without LOAD_LIBRARY_SEARCH_* flags can consult legacy
+                    // search paths (including the current working directory) depending on process
+                    // configuration. See Microsoft guidance on DLL search order hardening.
+                    if (handle == nullptr && PLATFORM_ALLOW_UNSAFE_DLL_SEARCH != 0)
+                    {
+                        handle = tryLoad(name);
+                    }
+                }
+                else if (handle == nullptr)
+                {
+                    // Flags supported but the restricted search didn't find it. Fall back to default dirs.
+                    handle = tryLoadEx(name, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
                 }
             }
+
             m_handle = handle;
 #else
-            m_handle = ::LoadLibraryA(name);
-#endif
-#else
             ::dlerror(); // clear any prior error
-            m_handle = ::dlopen(name, RTLD_LAZY | RTLD_LOCAL);
+            m_handle = ::dlopen(name, RTLD_NOW | RTLD_LOCAL);
 #endif
 
             if (m_handle != nullptr)
             {
                 m_loadedName = name;
-                m_lastError.clear();
                 return true;
             }
 
@@ -273,14 +543,15 @@ public:
                                                    0,
                                                    nullptr);
 
-                m_lastError = "LoadLibraryA failed for ";
-                m_lastError += name;
-                m_lastError += " (";
-                m_lastError += std::to_string(static_cast<unsigned long>(err));
-                m_lastError += "): ";
+                reason = "LoadLibrary failed for ";
+                reason += name;
+                reason += " (";
+                reason += std::to_string(static_cast<unsigned long>(err));
+                reason += "): ";
                 if (len != 0 && msg != nullptr)
                 {
-                    m_lastError += msg;
+                    reason += msg;
+                    TrimTrailingWhitespace(reason);
                 }
                 if (msg != nullptr)
                 {
@@ -288,19 +559,16 @@ public:
                 }
             }
 #else
-            {
-                const char* err = ::dlerror();
-                m_lastError = "dlopen failed for ";
-                m_lastError += name;
-                m_lastError += ": ";
-                if (err != nullptr)
-                {
-                    m_lastError += err;
-
-                }
-            }
-#endif
+        const char* err = ::dlerror();
+        if (err != nullptr)
+        {
+            reason = "dlopen failed for ";
+            reason += name;
+            reason += ": ";
+            reason += err;
         }
+#endif
+        } // for loop
 
         return false;
     }
@@ -322,7 +590,6 @@ public:
 #endif
         m_handle = nullptr;
         m_loadedName.clear();
-        m_lastError.clear();
     }
 
     /**
@@ -355,14 +622,6 @@ public:
     }
 
     /**
-     * @brief Returns the last error message from Open() (empty if none).
-     */
-    [[nodiscard]] auto LastError() const -> const std::string&
-    {
-        return m_lastError;
-    }
-
-    /**
      * @brief Returns the raw library handle.
      */
     [[nodiscard]] auto Handle() const -> LibHandle
@@ -384,9 +643,17 @@ public:
         }
 
 #ifdef _WIN32
-        return reinterpret_cast<void*>(::GetProcAddress(m_handle, name));
+        return WinProcToSymbol(::GetProcAddress(m_handle, name));
 #else
-        return ::dlsym(m_handle, name);
+        // clear any prior error
+        ::dlerror();
+        void* sym = ::dlsym(m_handle, name);
+        const char* err = ::dlerror();
+        if (err != nullptr)
+        {
+            return nullptr;
+        }
+        return sym;
 #endif
     }
 
@@ -407,16 +674,42 @@ public:
         // Search the main executable first.
         if (HMODULE mainModule = ::GetModuleHandleA(nullptr))
         {
-            if (void* ptr = reinterpret_cast<void*>(::GetProcAddress(mainModule, name)))
+            if (void* ptr = WinProcToSymbol(::GetProcAddress(mainModule, name)))
             {
                 return ptr;
+            }
+        }
+
+        // If the host has already loaded EGL/GLES provider DLLs (e.g., ANGLE), probe those modules as well.
+        // This is a best-effort enhancement for applications embedding this library where we may not have
+        // opened the provider libraries ourselves.
+        {
+            static constexpr std::array<const char*, 6> moduleNames =
+            {
+                "libEGL.dll",
+                "EGL.dll",
+                "libGLESv2.dll",
+                "GLESv2.dll",
+                "libGLESv3.dll",
+                "GLESv3.dll"
+            };
+
+            for (const auto& m : moduleNames)
+            {
+                if (HMODULE mod = ::GetModuleHandleA(m))
+                {
+                    if (void* ptr = WinProcToSymbol(::GetProcAddress(mod, name)))
+                    {
+                        return ptr;
+                    }
+                }
             }
         }
 
         // Then search the default OpenGL module.
         if (HMODULE glModule = ::GetModuleHandleA("opengl32.dll"))
         {
-            if (void* ptr = reinterpret_cast<void*>(::GetProcAddress(glModule, name)))
+            if (void* ptr = WinProcToSymbol(::GetProcAddress(glModule, name)))
             {
                 return ptr;
             }
@@ -424,15 +717,22 @@ public:
 
         return nullptr;
 #else
-        return ::dlsym(RTLD_DEFAULT, name);
+        // clear any prior error
+        ::dlerror();
+        void* sym = ::dlsym(RTLD_DEFAULT, name);
+        const char* err = ::dlerror();
+        if (err != nullptr)
+        {
+            return nullptr;
+        }
+        return sym;
 #endif
     }
 
 private:
     bool m_closeOnDestruct{true}; //!< If true, Close() is called from the destructor.
-    LibHandle m_handle{};          //!< Library handle used to access the system library.
-    std::string m_loadedName;      //< Successfully opened library name.
-    std::string m_lastError;       //< Last Open() error message.
+    LibHandle m_handle{};         //!< Library handle used to access the system library.
+    std::string m_loadedName;     //< Successfully opened library name.
 };
 
 /**
@@ -467,7 +767,7 @@ inline auto IsCurrentEgl(const DynamicLibrary& eglLib) -> bool
         return false;
     }
 
-    using EglGetCurrentContext = void* (*)();
+    using EglGetCurrentContext = void* (PLATFORM_EGLAPIENTRY*)();
     void* sym = eglLib.GetSymbol("eglGetCurrentContext");
     auto func = SymbolToFunction<EglGetCurrentContext>(sym);
     return func != nullptr && func() != nullptr;
@@ -483,13 +783,9 @@ inline auto IsCurrentGlx(const DynamicLibrary& glLib) -> bool
 
     using GlxGetCurrentContext = void* (*)();
 
-    void* sym = glLib.GetSymbol("glXGetCurrentContextARB");
+    // glXGetCurrentContext is the canonical API entry point.
+    void* sym = glLib.GetSymbol("glXGetCurrentContext");
     auto func = SymbolToFunction<GlxGetCurrentContext>(sym);
-    if (func == nullptr)
-    {
-        sym = glLib.GetSymbol("glXGetCurrentContext");
-        func = SymbolToFunction<GlxGetCurrentContext>(sym);
-    }
 
     return func != nullptr && func() != nullptr;
 }
@@ -503,8 +799,8 @@ inline auto IsCurrentWgl() -> bool
         return false;
     }
 
-    using WglGetCurrentContext = void* (WINAPI*)(void);
-    void* sym = reinterpret_cast<void*>(::GetProcAddress(glModule, "wglGetCurrentContext"));
+    using WglGetCurrentContext = void*(WINAPI*) (void);
+    void* sym = WinProcToSymbol(::GetProcAddress(glModule, "wglGetCurrentContext"));
     auto func = SymbolToFunction<WglGetCurrentContext>(sym);
     return func != nullptr && func() != nullptr;
 }
