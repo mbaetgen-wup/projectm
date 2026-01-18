@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <type_traits>
 
 #ifndef __EMSCRIPTEN__
 #ifdef _WIN32
@@ -76,8 +77,7 @@
 //
 // When enabled, the loader prints best-effort diagnostics for unusual ABI
 // situations (e.g., platforms where data pointers and function pointers have
-// different representations/sizes). Disabled by default to avoid noisy output
-// in production applications.
+// different representations/sizes). Disabled by default to avoid noisy output.
 #ifndef PLATFORM_LOADER_DIAGNOSTICS
 #define PLATFORM_LOADER_DIAGNOSTICS 0
 #endif
@@ -142,6 +142,10 @@ inline auto ReportFnPtrSizeMismatch(const char* where, std::size_t fnSize, std::
 template<typename Fn>
 auto SymbolToFunction(void* symbol) -> Fn
 {
+    static_assert(std::is_pointer<Fn>::value, "Fn must be a pointer type");
+    static_assert(std::is_function<typename std::remove_pointer<Fn>::type>::value,
+                  "Fn must be a function pointer type");
+
     if (symbol == nullptr)
     {
         return nullptr;
@@ -173,6 +177,10 @@ auto SymbolToFunction(void* symbol) -> Fn
 template<typename Fn>
 auto FunctionToSymbol(Fn func) -> void*
 {
+    static_assert(std::is_pointer<Fn>::value, "Fn must be a pointer type");
+    static_assert(std::is_function<typename std::remove_pointer<Fn>::type>::value,
+                  "Fn must be a function pointer type");
+
     if (func == nullptr)
     {
         return nullptr;
@@ -200,6 +208,10 @@ auto FunctionToSymbol(Fn func) -> void*
 template<typename Fn>
 auto FunctionToInteger(Fn func) -> std::uintptr_t
 {
+    static_assert(std::is_pointer<Fn>::value, "Fn must be a pointer type");
+    static_assert(std::is_function<typename std::remove_pointer<Fn>::type>::value,
+                  "Fn must be a function pointer type");
+
     if (func == nullptr)
     {
         return 0;
@@ -264,7 +276,7 @@ public:
     DynamicLibrary(const DynamicLibrary&) = delete;
     DynamicLibrary& operator=(const DynamicLibrary&) = delete;
 
-    inline auto Open(const char* const*, const std::string& reason) -> bool
+    inline auto Open(const char* const*, std::string& reason) -> bool
     {
         return false;
     }
@@ -303,40 +315,26 @@ inline auto IsCurrentEgl(const DynamicLibrary&) -> bool
     return false;
 }
 
-#ifndef _WIN32
-inline auto IsCurrentGlx(const DynamicLibrary&) -> bool
-{
-    return false;
-}
-#endif
-
 #else // #ifdef __EMSCRIPTEN__
 // -------------------------------------------------------------------------
 // Native implementation (Windows / POSIX)
 // -------------------------------------------------------------------------
 
 /**
- * @brief Wrapper around a dynamic library handle.
+ * @brief Wrapper around a dynamic library handle. Once opened, the library needs to be closed by calling Close() if needed, it is not closed automatically by destruction.
  */
 class DynamicLibrary
 {
 public:
     DynamicLibrary() = default;
 
-    ~DynamicLibrary()
-    {
-        if (m_closeOnDestruct)
-        {
-            Close();
-        }
-    }
+    ~DynamicLibrary() = default;
 
     DynamicLibrary(const DynamicLibrary&) = delete;
     auto operator=(const DynamicLibrary&) -> DynamicLibrary& = delete;
 
     DynamicLibrary(DynamicLibrary&& other) noexcept
-        : m_closeOnDestruct(other.m_closeOnDestruct)
-        , m_handle(other.m_handle)
+        : m_handle(other.m_handle)
         , m_loadedName(std::move(other.m_loadedName))
     {
         other.m_handle = nullptr;
@@ -348,7 +346,6 @@ public:
         if (this != &other)
         {
             Close();
-            m_closeOnDestruct = other.m_closeOnDestruct;
             m_handle = other.m_handle;
             m_loadedName = std::move(other.m_loadedName);
             other.m_handle = nullptr;
@@ -441,6 +438,32 @@ public:
                 return ::LoadLibraryA(dllName);
             };
 
+            // Best-effort legacy fallback when LOAD_LIBRARY_SEARCH_* flags are unavailable.
+            // Prefer LOAD_WITH_ALTERED_SEARCH_PATH for absolute paths so dependent DLLs are
+            // resolved relative to the loaded module directory.
+            auto tryLoadExplicitPathFallback = [&](const char* dllPath) -> HMODULE {
+                if (dllPath == nullptr)
+                {
+                    return nullptr;
+                }
+
+                // Absolute path heuristics for Win32:
+                //  - "C:\\..."  (drive)
+                //  - "\\\\server\\share..." (UNC)
+                const bool isDriveAbs = (std::strlen(dllPath) > 2u) && (dllPath[1] == ':') &&
+                                        (dllPath[2] == '\\' || dllPath[2] == '/');
+                const bool isUncAbs = (dllPath[0] == '\\' && dllPath[1] == '\\');
+
+                if (isDriveAbs || isUncAbs)
+                {
+                    return tryLoadEx(dllPath, LOAD_WITH_ALTERED_SEARCH_PATH);
+                }
+
+                // Relative paths are still explicit, but LOAD_WITH_ALTERED_SEARCH_PATH has
+                // undefined behavior for relative lpFileName.
+                return tryLoad(dllPath);
+            };
+
             // Detect whether the name contains a path. If so, LoadLibraryA is already safe (absolute/relative path is explicit).
             HMODULE handle = nullptr;
             const bool hasPath = (std::strchr(name, '\\') != nullptr) || (std::strchr(name, '/') != nullptr);
@@ -451,8 +474,9 @@ public:
                 handle = tryLoadEx(name, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
                 if (handle == nullptr && ::GetLastError() == ERROR_INVALID_PARAMETER)
                 {
-                    // Older OS loader: explicit path is already unambiguous.
-                    handle = tryLoad(name);
+                    // Older OS loader: use altered search path for absolute paths to improve
+                    // dependent DLL resolution.
+                    handle = tryLoadExplicitPathFallback(name);
                 }
             }
             else
@@ -469,8 +493,9 @@ public:
                     handle = tryLoadEx(appFull.c_str(), LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
                     if (handle == nullptr && ::GetLastError() == ERROR_INVALID_PARAMETER)
                     {
-                        // Older OS loader: explicit path is already unambiguous.
-                        handle = tryLoad(appFull.c_str());
+                        // Older OS loader: use altered search path for absolute paths to improve
+                        // dependent DLL resolution.
+                        handle = tryLoadExplicitPathFallback(appFull.c_str());
                     }
                 }
 
@@ -485,7 +510,7 @@ public:
                     // 1) Application directory
                     if (handle == nullptr && !appFull.empty())
                     {
-                        handle = tryLoad(appFull.c_str());
+                        handle = tryLoadExplicitPathFallback(appFull.c_str());
                     }
 
                     // 2) System32 for known system DLLs
@@ -494,7 +519,7 @@ public:
                         const std::string sysFull = buildSystem32Path("opengl32.dll");
                         if (!sysFull.empty())
                         {
-                            handle = tryLoad(sysFull.c_str());
+                            handle = tryLoadExplicitPathFallback(sysFull.c_str());
                         }
                     }
 
@@ -590,19 +615,6 @@ public:
 #endif
         m_handle = nullptr;
         m_loadedName.clear();
-    }
-
-    /**
-     * @brief Controls whether the library is automatically closed in the destructor.
-     *
-     * Some libraries (notably OpenGL drivers) are safest to keep loaded until process exit,
-     * especially when used from a process-lifetime singleton.
-     *
-     * @param enabled If false, the destructor will not call Close().
-     */
-    void SetCloseOnDestruct(bool enabled)
-    {
-        m_closeOnDestruct = enabled;
     }
 
     /**
@@ -730,82 +742,9 @@ public:
     }
 
 private:
-    bool m_closeOnDestruct{true}; //!< If true, Close() is called from the destructor.
     LibHandle m_handle{};         //!< Library handle used to access the system library.
     std::string m_loadedName;     //< Successfully opened library name.
 };
-
-/**
- * @brief Checks whether the current context is EGL-based.
- * @param eglLib The loaded EGL library.
- */
-auto IsCurrentEgl(const DynamicLibrary& eglLib) -> bool;
-
-/**
- * @brief Checks whether the current context is GLX-based (Linux/Unix).
- * @param glLib The loaded GL library.
- */
-#ifndef _WIN32
-
-auto IsCurrentGlx(const DynamicLibrary& glLib) -> bool;
-
-#else
-
-/**
- * @brief Checks whether the current context is WGL-based (Windows).
- */
-auto IsCurrentWgl() -> bool;
-
-#endif
-
-// ---------------- Inline implementations -----------------------------------
-
-inline auto IsCurrentEgl(const DynamicLibrary& eglLib) -> bool
-{
-    if (!eglLib.IsOpen())
-    {
-        return false;
-    }
-
-    using EglGetCurrentContext = void* (PLATFORM_EGLAPIENTRY*)();
-    void* sym = eglLib.GetSymbol("eglGetCurrentContext");
-    auto func = SymbolToFunction<EglGetCurrentContext>(sym);
-    return func != nullptr && func() != nullptr;
-}
-
-#ifndef _WIN32
-inline auto IsCurrentGlx(const DynamicLibrary& glLib) -> bool
-{
-    if (!glLib.IsOpen())
-    {
-        return false;
-    }
-
-    using GlxGetCurrentContext = void* (*)();
-
-    // glXGetCurrentContext is the canonical API entry point.
-    void* sym = glLib.GetSymbol("glXGetCurrentContext");
-    auto func = SymbolToFunction<GlxGetCurrentContext>(sym);
-
-    return func != nullptr && func() != nullptr;
-}
-
-#else
-inline auto IsCurrentWgl() -> bool
-{
-    HMODULE glModule = ::GetModuleHandleA("opengl32.dll");
-    if (glModule == nullptr)
-    {
-        return false;
-    }
-
-    using WglGetCurrentContext = void*(WINAPI*) (void);
-    void* sym = WinProcToSymbol(::GetProcAddress(glModule, "wglGetCurrentContext"));
-    auto func = SymbolToFunction<WglGetCurrentContext>(sym);
-    return func != nullptr && func() != nullptr;
-}
-
-#endif
 
 #endif // #ifdef __EMSCRIPTEN__
 

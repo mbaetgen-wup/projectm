@@ -319,8 +319,9 @@ auto QueryInfo(GLContextInfo& info, std::string& reason) -> bool
 
 #if defined(__EMSCRIPTEN__)
     // Emscripten can be configured to return WebGL-format version strings (e.g. "WebGL 2.0")
-    // instead of ES-format strings. WebGL 2 corresponds closely to an OpenGL ES 3.0-class API.
-    // If version parsing yields 2.0 from a WebGL 2.0 string, lift it to 3.0 for minimum-version checks.
+    // instead of ES-format strings. For the purposes of *minimum version checking* (not feature
+    // completeness), WebGL 2 most closely maps to a GLES 3.0-class API surface.
+    // If version parsing yields 2.0 from a WebGL 2.0 string, lift it to 3.0 for requirement checks.
     if (std::strstr(ver, "WebGL 2") != nullptr)
     {
         if (info.major < 3)

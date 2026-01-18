@@ -33,7 +33,7 @@ struct GLContextRequirements
  */
 struct GLContextInfo
 {
-    GLApi api{GLApi::Any};    //!< Detected API
+    GLApi api{GLApi::Any};    //!< Detected API (WebGL is treated as GLES-like on Emscripten)
     int major{};              //!< Detected major version
     int minor{};              //!< Detected minor version
     std::string versionStr;   //!< GL_VERSION
@@ -100,12 +100,12 @@ public:
     };
 
     /**
-     * @brief Format gl infos as a compact summary of the result.
+     * @brief Formats GL context info as a compact summary string.
      */
     [[nodiscard]] static auto FormatCompactLine(const GLContextInfo& info) -> std::string;
 
 };
 
-} /* namespace Platform */
-} /* namespace Renderer */
-} /* namespace libprojectM */
+} // namespace Platform
+} // namespace Renderer
+} // namespace libprojectM
