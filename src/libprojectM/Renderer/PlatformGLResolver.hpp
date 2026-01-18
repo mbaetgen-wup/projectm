@@ -153,7 +153,7 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *    |     |
  *    |     +-- ProbeCurrentContext() checks:
  *    |            EGL: eglGetCurrentContext() != nullptr                           ? (Android/Linux/macOS/Windows)
- *    |            GLX: glXGetCurrentContext() != nullptr                           ? (Linux, not Android/macOS/Windows)
+ *    |            GLX: glXGetCurrentContext() != nullptr                           ? (X11, not Android/macOS/Windows)
  *    |            WGL: wglGetCurrentContext() != nullptr                           ? (Windows)
  *    |            CGL: CGLGetCurrentContext() != nullptr                           ? (macOS)
  *    |            WebGL: emscripten_webgl_get_current_context() != nullptr         ? (Emscripten)
@@ -216,19 +216,19 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *    |            try wglGetProcAddress(name)
  *    |            if not sentinel {1,2,3,-1}
  *    |
- *    +--> (3) Global symbol table lookup (outside ResolveUnlocked)
+ *    +--> (3) Global symbol table lookup
  *    |      |
  *    |      +-- POSIX: dlsym(RTLD_DEFAULT, name)
  *    |      +-- Windows: GetProcAddress(main exe), then known EGL/GLES modules, then opengl32.dll module
  *    |
  *    +--> (4) Direct library exports (if libraries were opened)
  *    |      |
- *    |      +-- m_eglLib.GetSymbol(name)
- *    |      +-- m_glLib.GetSymbol(name)
+ *    |      +-- m_eglLib.GetSymbol(name)   (*)
+ *    |      +-- m_glLib.GetSymbol(name)    (Linux/Windows/macOS)
  *    |      +-- m_glxLib.GetSymbol(name)   (Linux)
  *    |
- *
- *
+ *   \/
+ * nullptr
  *
  */
 class GLResolver
@@ -309,26 +309,60 @@ public:
     static auto GladResolverThunk(const char* name) -> void*;
 
 private:
-    auto OpenNativeLibraries() -> void;
-    auto ResolveProviderFunctions() -> void;
-    auto DetectBackend() -> void;
-    auto SetBackendDefault() -> void;
-    auto CheckGLRequirementsUnlocked() -> GLContextCheckResult;
-    auto LoadGladUnlocked() -> bool;
-    auto HasCurrentContext(std::string& outReason) const -> bool;
 
+    // Basic EGL access signatures.
     using EglProc = void (PLATFORM_EGLAPIENTRY*)();
     using EglGetProcAddressFn = EglProc (PLATFORM_EGLAPIENTRY*)(const char* name);
+    using EglGetCurrentContextFn = void* (PLATFORM_EGLAPIENTRY*)();
 
-    using GetCurrentContextFn = void* (PLATFORM_EGLAPIENTRY*)();
-
-#ifndef _WIN32
-    /* glXGetProcAddress/glXGetProcAddressARB return a function pointer. */
-    using GlxGetProcAddressFn = void (*(*)(const unsigned char*))();
-#else
+#ifdef _WIN32
+    // Basic WGL access signatures.
     using WglGetProcAddressFn = PROC (WINAPI*)(LPCSTR);
+    using WglGetCurrentContextFn = HGLRC (WINAPI*)();
+#elif defined(__APPLE__)
+        using CglGetCurrentContextFn = void* (*)();
+#elif !defined(__ANDROID__)
+    // Basic GLX access signatures.
+    /**
+     * glXGetProcAddress/glXGetProcAddressARB return a function pointer. \
+    */
+    using GlxGetProcAddressFn = void (*(*)(const unsigned char*))();
+    using GlxGetCurrentContextFn = void* (*)();
+
 #endif
 
+    /**
+     * Current GL context probe results.
+     */
+    struct CurrentContextProbe
+    {
+        bool eglLibOpened{false};
+        bool eglAvailable{false};
+        bool eglCurrent{false};
+
+        bool glxLibOpened{false};
+        bool glxAvailable{false};
+        bool glxCurrent{false};
+
+        bool wglLibOpened{false};
+        bool wglAvailable{false};
+        bool wglCurrent{false};
+
+        bool cglLibOpened{false};
+        bool cglAvailable{false};
+        bool cglCurrent{false};
+
+        bool webglAvailable{false};
+        bool webglCurrent{false};
+    };
+
+    auto OpenNativeLibraries() -> void;
+    auto ResolveProviderFunctions() -> void;
+    auto ProbeCurrentContext() const -> CurrentContextProbe;
+    auto HasCurrentContext(const CurrentContextProbe& probe, std::string& outReason) -> bool;
+    auto DetectBackend(const CurrentContextProbe& probe) -> void;
+    auto CheckGLRequirementsUnlocked() -> GLContextCheckResult;
+    auto LoadGladUnlocked() -> bool;
     auto ResolveUnlocked(const char* name,
                          UserResolver userResolver,
                          void* userData,
@@ -345,29 +379,31 @@ private:
 #endif
                          ) const -> void*;
 
-    mutable std::mutex m_mutex;                             //!< Mutex to synchronize initialization and access.
-    bool m_loaded{false};                                   //!< True if the resolver is initialized.
-    bool m_initializing{false};                             //!< True while an Initialize() attempt is in-flight.
-    mutable std::condition_variable m_initCv;               //!< Signals completion of Initialize()/Shutdown().
-    Backend m_backend{ Backend::None };                     //!< Detected GL backend.
+    mutable std::mutex m_mutex;                                     //!< Mutex to synchronize initialization and access.
+    bool m_loaded{false};                                           //!< True if the resolver is initialized.
+    bool m_initializing{false};                                     //!< True while an Initialize() attempt is in-flight.
+    mutable std::condition_variable m_initCv;                       //!< Signals completion of Initialize()/Shutdown().
+    Backend m_backend{ Backend::None };                             //!< Detected GL backend.
 
-    UserResolver m_userResolver{nullptr};                   //!< User provided function resolver. Optional, may be null.
-    void* m_userData{nullptr};                              //!< User data to pass to user provided function resolver.
+    UserResolver m_userResolver{nullptr};                           //!< User provided function resolver. Optional, may be null.
+    void* m_userData{nullptr};                                      //!< User data to pass to user provided function resolver.
 
-    DynamicLibrary m_eglLib;                                //!< EGL library handle. Optional, may be empty.
-    DynamicLibrary m_glLib;                                 //!< GL library handle. Optional, may be empty.
-    DynamicLibrary m_glxLib;                                //!< GLX library handle. Optional, may be empty.
+    DynamicLibrary m_eglLib;                                        //!< EGL library handle. Optional, may be empty.
+    DynamicLibrary m_glLib;                                         //!< GL library handle. Optional, may be empty.
+    DynamicLibrary m_glxLib;                                        //!< GLX library handle. Optional, may be empty.
 
-    EglGetProcAddressFn m_eglGetProcAddress{nullptr};       //!< eglGetProcAddress handle.
-    bool m_eglGetAllProcAddresses{false};                   //!< True if EGL_KHR_get_all_proc_addresses (or client variant) is advertised.
-    GetCurrentContextFn m_eglGetCurrentContext{nullptr};    //!< eglGetCurrentContext handle (for backend probing).
-#if defined(__APPLE__) && !defined(__EMSCRIPTEN__) && !defined(_WIN32)
-    GetCurrentContextFn m_cglGetCurrentContext{nullptr};    //!< CGLGetCurrentContext handle (for backend probing).
-#endif
-#ifndef _WIN32
-    GlxGetProcAddressFn m_glxGetProcAddress{nullptr};       //!< glXGetProcAddress* handle.
+    EglGetProcAddressFn m_eglGetProcAddress{nullptr};               //!< eglGetProcAddress handle.
+    bool m_eglGetAllProcAddresses{false};                           //!< True if EGL_KHR_get_all_proc_addresses (or client variant) is advertised.
+    EglGetCurrentContextFn m_eglGetCurrentContext{nullptr};         //!< eglGetCurrentContext handle.
+#ifdef _WIN32
+    WglGetProcAddressFn m_wglGetProcAddress{nullptr};               //!< wglGetProcAddress handle.
+    WglGetCurrentContextFn m_wglGetCurrentContext{nullptr};         //!< wglGetCurrentContext handle.
+#elif defined(__APPLE__)
+    CglGetCurrentContextFn m_cglGetCurrentContext{nullptr};         //!< CGLGetCurrentContext handle.
+#elif !defined(__ANDROID__)
+    GlxGetProcAddressFn m_glxGetProcAddress{nullptr};               //!< glXGetProcAddress* handle.
+    GlxGetCurrentContextFn m_glxGetCurrentContext{nullptr};         //!< glXGetCurrentContext handle.
 #else
-    WglGetProcAddressFn m_wglGetProcAddress{nullptr};       //!< wglGetProcAddress handle.
 #endif
 };
 

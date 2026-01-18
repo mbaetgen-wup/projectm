@@ -36,173 +36,27 @@ namespace
 {
 
 /**
- * Current GL context probe results.
+ * @brief Checks whether a space-separated token list contains an exact token match.
+ *
+ * This utility is intended for parsing OpenGL/EGL/GLX extension strings, which are
+ * specified as a sequence of extension names separated by ASCII spaces. The match
+ * is performed on whole tokens only (not substrings) to avoid false positives
+ * (e.g. @c "FOO" will not match @c "FOOBAR").
+ *
+ * The scan skips over consecutive spaces and compares each token’s length and
+ * contents against @p token.
+ *
+ * @param list  NUL-terminated string containing space-separated tokens (may be nullptr).
+ * @param token NUL-terminated token to search for (may be nullptr). An empty token
+ *              never matches.
+ *
+ * @return true if @p list contains a token exactly equal to @p token; false otherwise.
+ *
+ * @note This function treats only the space character (' ') as a separator, matching
+ *       the common extension-string format used by OpenGL-family APIs.
+ * @note Comparison is case-sensitive.
+ * @warning The inputs must be valid NUL-terminated strings when non-null.
  */
-struct CurrentContextProbe
-{
-    bool eglLibOpened{false};
-    bool eglAvailable{false};
-    bool eglCurrent{false};
-
-    bool glxLibOpened{false};
-    bool glxAvailable{false};
-    bool glxCurrent{false};
-
-    bool wglLibOpened{false};
-    bool wglAvailable{false};
-    bool wglCurrent{false};
-
-    bool cglLibOpened{false};
-    bool cglAvailable{false};
-    bool cglCurrent{false};
-};
-
-auto ProbeCurrentContext(const DynamicLibrary& eglLib,
-                                const DynamicLibrary& glLib,
-                                const DynamicLibrary& glxLib) -> CurrentContextProbe
-{
-    CurrentContextProbe result;
-
-#ifdef __EMSCRIPTEN__
-    (void)eglLib;
-    (void)glLib;
-    (void)glxLib;
-    return result;
-#else
-    // EGL (including ANGLE, GLES, and desktop EGL)
-    {
-        result.eglLibOpened = eglLib.IsOpen();
-        using EglGetCurrentContextFn = void* (PLATFORM_EGLAPIENTRY*)();
-
-        void* sym = nullptr;
-        if (eglLib.IsOpen())
-        {
-            sym = eglLib.GetSymbol("eglGetCurrentContext");
-        }
-        if (sym == nullptr)
-        {
-            // POSIX: if EGL is already linked/loaded by the host, this can still succeed without dlopen.
-            // Windows: FindGlobalSymbol only checks main module/opengl32, so this is best-effort.
-            sym = DynamicLibrary::FindGlobalSymbol("eglGetCurrentContext");
-        }
-
-        auto func = SymbolToFunction<EglGetCurrentContextFn>(sym);
-        if (func != nullptr)
-        {
-            result.eglAvailable = true;
-            result.eglCurrent = func() != nullptr;
-        }
-    }
-
-    // GLX (Linux/Unix via libGLX/libGL or GLVND dispatch)
-#if !defined(_WIN32) && !defined(__APPLE__) && !defined(__ANDROID__)
-    {
-        result.glxLibOpened = glxLib.IsOpen() || glLib.IsOpen();
-        using GlxGetCurrentContextFn = void* (*)();
-
-        void* sym = nullptr;
-        if (glxLib.IsOpen())
-        {
-            sym = glxLib.GetSymbol("glXGetCurrentContext");
-        }
-        if (sym == nullptr && glLib.IsOpen())
-        {
-            sym = glLib.GetSymbol("glXGetCurrentContext");
-        }
-        if (sym == nullptr)
-        {
-            // If GLX is already loaded/linked by the host, probe via global symbols (GLVND setups).
-            sym = DynamicLibrary::FindGlobalSymbol("glXGetCurrentContext");
-        }
-
-        auto func = SymbolToFunction<GlxGetCurrentContextFn>(sym);
-        if (func != nullptr)
-        {
-            result.glxAvailable = true;
-            result.glxCurrent = func() != nullptr;
-        }
-    }
-#endif
-
-    // WGL (Windows desktop GL)
-#ifdef _WIN32
-    {
-        const HMODULE glModule = ::GetModuleHandleA("opengl32.dll");
-        result.wglLibOpened = glModule != nullptr;
-
-        if (glModule != nullptr)
-        {
-            const FARPROC proc = ::GetProcAddress(glModule, "wglGetCurrentContext");
-            using WglGetCurrentContextFn = HGLRC (WINAPI*)();
-            auto func = SymbolToFunction<WglGetCurrentContextFn>(WinProcToSymbol(proc));
-            if (func != nullptr)
-            {
-                result.wglAvailable = true;
-                result.wglCurrent = func() != nullptr;
-            }
-        }
-    }
-#endif
-
-    // CGL (macOS native OpenGL)
-#if defined(__APPLE__) && !defined(_WIN32)
-    {
-        result.cglLibOpened = glLib.IsOpen();
-        using CglGetCurrentContextFn = void* (*)();
-
-        void* sym = nullptr;
-        if (glLib.IsOpen())
-        {
-            sym = glLib.GetSymbol("CGLGetCurrentContext");
-        }
-        if (sym == nullptr)
-        {
-            sym = DynamicLibrary::FindGlobalSymbol("CGLGetCurrentContext");
-        }
-
-        auto func = SymbolToFunction<CglGetCurrentContextFn>(sym);
-        if (func != nullptr)
-        {
-            result.cglAvailable = true;
-            result.cglCurrent = func() != nullptr;
-        }
-    }
-#endif
-
-    return result;
-#endif // __EMSCRIPTEN__
-}
-
-auto PickCurrentBackend(const CurrentContextProbe& probe) -> Backend
-{
-#ifdef __EMSCRIPTEN__
-    (void)probe;
-    return Backend::WebGL;
-#else
-    if (probe.eglCurrent)
-    {
-        return Backend::EGL;
-    }
-#ifdef _WIN32
-    if (probe.wglCurrent)
-    {
-        return Backend::WGL;
-    }
-#elif defined(__APPLE__)
-    if (probe.cglCurrent)
-    {
-        return Backend::CGL;
-    }
-#elif !defined(__ANDROID__)
-    if (probe.glxCurrent)
-    {
-        return Backend::GLX;
-    }
-#endif
-    return Backend::None;
-#endif
-}
-
 auto HasSpaceSeparatedToken(const char* list, const char* token) -> bool
 {
     if (list == nullptr || token == nullptr)
@@ -235,7 +89,7 @@ auto HasSpaceSeparatedToken(const char* list, const char* token) -> bool
         {
             ++p;
         }
-        const std::size_t len = static_cast<std::size_t>(p - start);
+        const auto len = static_cast<std::size_t>(p - start);
         if (len == tokenLen && std::strncmp(start, token, tokenLen) == 0)
         {
             return true;
@@ -245,19 +99,39 @@ auto HasSpaceSeparatedToken(const char* list, const char* token) -> bool
     return false;
 }
 
+/**
+ * @brief Heuristically determines whether a name looks like an OpenGL-style extension symbol.
+ *
+ * OpenGL-family extension entry points commonly end with a vendor or standards-body
+ * suffix (e.g. @c ARB, @c EXT, @c KHR, @c OES, @c NV). This function performs a
+ * lightweight suffix check against a curated set of common suffixes and returns
+ * true if any suffix matches the end of @p name.
+ *
+ * This is a heuristic used to decide whether an entry point is *likely* to be an
+ * extension name (and therefore safe/appropriate to resolve using mechanisms like
+ * @c wglGetProcAddress / @c glXGetProcAddress / @c eglGetProcAddress in some
+ * backend policies).
+ *
+ * @param name NUL-terminated symbol name to test. Must not be nullptr.
+ *
+ * @return true if @p name ends with one of the known extension suffixes; false otherwise.
+ *
+ * @note Comparison is case-sensitive and expects the conventional uppercase suffixes.
+ * @warning Passing nullptr is undefined behavior (the function calls @c std::strlen(name)).
+ */
 auto IsLikelyExtensionName(const char* name) -> bool
 {
     // Common extension suffixes.
-    static constexpr std::array<const char*, 33> kSuffixes = {
+    static constexpr std::array<const char*, 32> kSuffixes = {
         "ARB", "EXT", "KHR", "OES", "NV", "NVX", "AMD", "APPLE",
         "ANGLE", "INTEL", "MESA", "QCOM", "IMG", "ARM", "ATI", "IBM",
         "SUN", "SGI", "SGIX", "OML", "GREMEDY", "HP", "3DFX", "S3",
-        "PVR", "VIV", "ARM", "OVR", "NOK", "MSFT", "SEC", "DMP", "FJ" };
+        "PVR", "VIV", "OVR", "NOK", "MSFT", "SEC", "DMP", "FJ" };
 
-    const std::size_t len = std::strlen(name);
+    const auto len = std::strlen(name);
     for (const char* suffix : kSuffixes)
     {
-        const std::size_t slen = std::strlen(suffix);
+        const auto slen = std::strlen(suffix);
         if (len >= slen && std::strcmp(name + (len - slen), suffix) == 0)
         {
             return true;
@@ -332,59 +206,6 @@ auto GLResolver::Instance() -> GLResolver&
     return instance;
 }
 
-void GLResolver::SetBackendDefault()
-{
-    if (m_backend != Backend::None)
-    {
-        return;
-    }
-
-#ifdef __EMSCRIPTEN__
-    m_backend = Backend::WebGL;
-    return;
-#endif
-
-    // Only assign a default when it is unambiguous and does not reduce resolver coverage.
-    // Leaving Backend::None enables the generic resolver path (tries all available providers).
-    const bool hasEglProvider = (m_eglGetProcAddress != nullptr);
-
-#if defined(__APPLE__) && !defined(_WIN32)
-    // macOS native OpenGL: no provider GetProcAddress; treat as CGL if nothing else is available.
-    const bool hasAnyProvider = hasEglProvider;
-    if (!hasAnyProvider)
-    {
-        m_backend = Backend::CGL;
-        return;
-    }
-#endif
-
-#ifndef _WIN32
-    const bool hasGlxProvider = (m_glxGetProcAddress != nullptr);
-    if (hasEglProvider && !hasGlxProvider)
-    {
-        m_backend = Backend::EGL;
-        return;
-    }
-    if (hasGlxProvider && !hasEglProvider)
-    {
-        m_backend = Backend::GLX;
-        return;
-    }
-#else
-    const bool hasWglProvider = (m_wglGetProcAddress != nullptr);
-    if (hasEglProvider && !hasWglProvider)
-    {
-        m_backend = Backend::EGL;
-        return;
-    }
-    if (hasWglProvider && !hasEglProvider)
-    {
-        m_backend = Backend::WGL;
-        return;
-    }
-#endif
-}
-
 auto GLResolver::CheckGLRequirementsUnlocked() -> GLContextCheckResult
 {
     GLContextCheck::Builder glCheck;
@@ -433,10 +254,13 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
     ResolveProviderFunctions();
 #endif
 
+    // Try to find a current gl context.
+    auto currentContext = ProbeCurrentContext();
+
     // Precondition: caller must have a current context on this thread.
     {
         std::string reason;
-        if (!HasCurrentContext(reason))
+        if (!HasCurrentContext(currentContext, reason))
         {
             m_loaded = false;
             m_backend = Backend::None;
@@ -450,9 +274,10 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
         }
     }
 
-    DetectBackend();
+    // Determine backend from current context.
+    DetectBackend(currentContext);
 
-    // Emit a concise diagnostics line for troubleshooting mixed-stack processes.
+    // Emit a diagnostics line for troubleshooting.
     {
         std::string diag = std::string("[GLResolver] Resolver policy: backend=\"") +
                            BackendToString(m_backend) + "\""
@@ -488,9 +313,6 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
     }
     else
     {
-        // Set default in case detection failed, but loading succeeded.
-        SetBackendDefault();
-
         lock.unlock();
         const auto glDetails = CheckGLRequirementsUnlocked();
         lock.lock();
@@ -523,95 +345,6 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
     lock.unlock();
 
     return m_loaded;
-}
-
-auto GLResolver::HasCurrentContext(std::string& outReason) const -> bool
-{
-#ifdef __EMSCRIPTEN__
-    const EMSCRIPTEN_WEBGL_CONTEXT_HANDLE ctx = emscripten_webgl_get_current_context();
-    bool webglCurrent = ctx != 0;
-    if (webglCurrent)
-    {
-        return true;
-    }
-    outReason = "WebGL: no current context";
-    return false;
-#else
-    auto probe = ProbeCurrentContext(m_eglLib, m_glLib, m_glxLib);
-    if (probe.eglCurrent || probe.glxCurrent || probe.wglCurrent || probe.cglCurrent)
-    {
-        return true;
-    }
-
-    std::string reason;
-
-    if (probe.eglAvailable)
-    {
-        reason += "EGL: no current context; ";
-    }
-    else if (probe.eglLibOpened)
-    {
-        reason += "EGL: eglGetCurrentContext missing; ";
-    }
-
-#if !defined(_WIN32) && !defined(__APPLE__) && !defined(__ANDROID__)
-    if (probe.glxAvailable)
-    {
-        reason += "GLX: no current context; ";
-    }
-    else if (probe.glxLibOpened)
-    {
-        reason += "GLX: glXGetCurrentContext missing; ";
-    }
-#endif
-
-#ifdef _WIN32
-    if (probe.wglAvailable)
-    {
-        reason += "WGL: no current context; ";
-    }
-    else if (probe.wglLibOpened)
-    {
-        reason += "WGL: wglGetCurrentContext missing; ";
-    }
-    else
-    {
-        reason += "WGL: opengl32.dll not loaded; ";
-    }
-#endif
-
-#if defined(__APPLE__) && !defined(_WIN32)
-    if (probe.cglAvailable)
-    {
-        reason += "CGL: no current context; ";
-    }
-    else if (probe.cglLibOpened)
-    {
-        reason += "CGL: CGLGetCurrentContext missing; ";
-    }
-    else
-    {
-        reason += "CGL: CGLGetCurrentContext symbol not available; ";
-    }
-#endif
-
-    if (reason.empty())
-    {
-        // If nothing was available, libraries may not have been opened yet.
-        reason = "No platform current-context query available (libraries not loaded?)";
-    }
-    else
-    {
-        // Trim trailing "; "
-        if (reason.size() >= 2)
-        {
-            reason.resize(reason.size() - 2);
-        }
-    }
-
-    outReason = reason;
-    return false;
-#endif // #ifdef __EMSCRIPTEN__
 }
 
 auto GLResolver::IsLoaded() const -> bool
@@ -668,14 +401,14 @@ auto GLResolver::GetProcAddress(const char* name) const -> void*
         glxFn = m_glxGetProcAddress;
 #endif
 
-#else
+#else // #ifndef _WIN32
         wglFn = m_wglGetProcAddress;
 #endif // #ifndef _WIN32
 
 #ifndef __EMSCRIPTEN__
         if (backend == Backend::None)
         {
-            probe = ProbeCurrentContext(m_eglLib, m_glLib, m_glxLib);
+            probe = ProbeCurrentContext();
             haveProbe = true;
         }
 #endif
@@ -697,11 +430,11 @@ auto GLResolver::GetProcAddress(const char* name) const -> void*
     else
     {
         // Backend is known: allow the matching provider. ResolveUnlocked still gates by backend.
-        allowEglProvider = (backend == Backend::EGL);
+        allowEglProvider = backend == Backend::EGL;
 #ifndef _WIN32
-        allowGlxProvider = (backend == Backend::GLX);
+        allowGlxProvider = backend == Backend::GLX;
 #else
-        allowWglProvider = (backend == Backend::WGL);
+        allowWglProvider = backend == Backend::WGL;
 #endif
     }
 #endif
@@ -847,7 +580,7 @@ void GLResolver::OpenNativeLibraries()
 
     reason = "";
     const bool eglOpened = m_eglLib.Open(kEglNames.data(), reason);
-    if (eglOpened == false)
+    if (!eglOpened)
     {
         LOG_DEBUG(std::string("[GLResolver] Failed to open EGL library: ") + reason);
     }
@@ -938,7 +671,7 @@ void GLResolver::ResolveProviderFunctions()
         {
             sym = DynamicLibrary::FindGlobalSymbol("eglGetCurrentContext");
         }
-        m_eglGetCurrentContext = SymbolToFunction<GetCurrentContextFn>(sym);
+        m_eglGetCurrentContext = SymbolToFunction<EglGetCurrentContextFn>(sym);
     }
 
     // Detect EGL_KHR_get_all_proc_addresses / EGL_KHR_client_get_all_proc_addresses.
@@ -1068,7 +801,40 @@ void GLResolver::ResolveProviderFunctions()
             LOG_DEBUG("[GLResolver] wglGetProcAddress not found (GL library loaded but missing symbol)");
         }
     }
-#else
+    {
+        void* sym = nullptr;
+        if (m_glLib.IsOpen())
+        {
+            sym = m_glLib.GetSymbol("wglGetCurrentContext");
+        }
+        if (sym == nullptr)
+        {
+            sym = DynamicLibrary::FindGlobalSymbol("wglGetCurrentContext");
+        }
+        if (sym != nullptr)
+        {
+            m_wglGetCurrentContext = SymbolToFunction<WglGetCurrentContextFn>(sym);
+            if (m_wglGetCurrentContext == nullptr)
+            {
+                LOG_DEBUG("[GLResolver] m_wglGetCurrentContextAddress found but could not be converted to a function pointer");
+            }
+        }
+    }
+#elif defined(__APPLE__)
+        using CglGetCurrentContextFn = void* (*)();
+
+        void* sym = nullptr;
+        if (m_glLib.IsOpen())
+        {
+            sym = m_glLib.GetSymbol("CGLGetCurrentContext");
+        }
+        if (sym == nullptr)
+        {
+            sym = DynamicLibrary::FindGlobalSymbol("CGLGetCurrentContext");
+        }
+
+        m_cglGetCurrentContext = SymbolToFunction<CglGetCurrentContextFn>(sym);
+#elif !defined(__ANDROID__)
     // GLX
     {
         void* sym = nullptr;
@@ -1114,25 +880,26 @@ void GLResolver::ResolveProviderFunctions()
             LOG_DEBUG("[GLResolver] glXGetProcAddress* not found (GLX/GL loaded but missing symbol)");
         }
     }
-#endif
-
-
-
-#if defined(__APPLE__) && !defined(__EMSCRIPTEN__) && !defined(_WIN32)
-    // CGLGetCurrentContext (used for backend probing; optional)
     {
         void* sym = nullptr;
-        if (m_glLib.IsOpen())
+        if (m_glxLib.IsOpen())
         {
-            sym = m_glLib.GetSymbol("CGLGetCurrentContext");
+            sym = m_glxLib.GetSymbol("glXGetCurrentContext");
+        }
+        if (sym == nullptr && m_glLib.IsOpen())
+        {
+            sym = m_glLib.GetSymbol("glXGetCurrentContext");
         }
         if (sym == nullptr)
         {
-            sym = DynamicLibrary::FindGlobalSymbol("CGLGetCurrentContext");
+            // If GLX is already loaded/linked by the host, probe via global symbols (GLVND setups).
+            sym = DynamicLibrary::FindGlobalSymbol("glXGetCurrentContext");
         }
-        m_cglGetCurrentContext = SymbolToFunction<GetCurrentContextFn>(sym);
+
+        m_glxGetCurrentContext = SymbolToFunction<GlxGetCurrentContextFn>(sym);
     }
 #endif
+
     LOG_DEBUG(std::string("[GLResolver] EGL  handle=") +
               std::to_string(reinterpret_cast<std::uintptr_t>(m_eglLib.Handle())) +
               " lib=\"" + m_eglLib.LoadedName() + "\"");
@@ -1146,46 +913,196 @@ void GLResolver::ResolveProviderFunctions()
               " lib=\"" + m_glxLib.LoadedName() + "\"");
 }
 
-void GLResolver::DetectBackend()
+auto GLResolver::ProbeCurrentContext() const -> CurrentContextProbe
 {
-    // Detect current context provider
-    // This is best-effort: on some platforms (e.g. macOS/CGL) it may report "none"
+    CurrentContextProbe result;
 
 #ifdef __EMSCRIPTEN__
-    m_backend = Backend::WebGL;
-#else
-    const CurrentContextProbe probe = ProbeCurrentContext(m_eglLib, m_glLib, m_glxLib);
-    const Backend picked = PickCurrentBackend(probe);
 
-    switch (picked)
+    result.webglAvailable = true;
+
+    const EMSCRIPTEN_WEBGL_CONTEXT_HANDLE ctx = emscripten_webgl_get_current_context();
+
+    result.webglCurrent = ctx != 0;
+
+#else
+
+    // EGL (including ANGLE, GLES, and desktop EGL)
     {
-        case Backend::EGL:
-            LOG_DEBUG("[GLResolver] Current context: EGL");
-        break;
-#if !defined(_WIN32) && !defined(__APPLE__) && !defined(__ANDROID__)
-        case Backend::GLX:
-            LOG_DEBUG("[GLResolver] Current context: GLX");
-        break;
-#endif
-#ifdef _WIN32
-        case Backend::WGL:
-            LOG_DEBUG("[GLResolver] Current context: WGL");
-        break;
-#endif
-#if defined(__APPLE__) && !defined(_WIN32)
-        case Backend::CGL:
-            LOG_DEBUG("[GLResolver] Current context: CGL");
-        break;
-#endif
-        default:
-            LOG_DEBUG("[GLResolver] Current context: (unknown, will try generic loader)");
-        break;
+        result.eglLibOpened = m_eglLib.IsOpen();
+
+        if (m_eglGetCurrentContext != nullptr)
+        {
+            result.eglAvailable = true;
+            result.eglCurrent = m_eglGetCurrentContext() != nullptr;
+        }
     }
 
-    m_backend = picked;
+#ifdef _WIN32
 
+    result.wglLibOpened = m_glLib.IsOpen();
+
+    if (m_wglGetCurrentContext != nullptr)
+    {
+        result.wglAvailable = true;
+        result.wglCurrent = m_wglGetCurrentContext() != nullptr;
+    }
+
+#elif defined(__APPLE__)
+
+    // CGL (macOS native OpenGL)
+    {
+        result.cglLibOpened = m_glLib.IsOpen();
+
+        if (m_cglGetCurrentContext != nullptr)
+        {
+            result.cglAvailable = true;
+            result.cglCurrent = m_cglGetCurrentContext() != nullptr;
+        }
+    }
+
+#elif !defined(__ANDROID__)
+
+    // GLX (Linux/Unix via libGLX/libGL or GLVND dispatch)
+    {
+        result.glxLibOpened = m_glxLib.IsOpen() || m_glLib.IsOpen();
+
+        if (m_glxGetCurrentContext != nullptr)
+        {
+            result.glxAvailable = true;
+            result.glxCurrent = m_glxGetCurrentContext() != nullptr;
+        }
+    }
+
+#endif
+
+    return result;
+#endif // __EMSCRIPTEN__
+}
+
+auto GLResolver::HasCurrentContext(const CurrentContextProbe& probe, std::string& outReason) -> bool
+{
+#ifdef __EMSCRIPTEN__
+    if (probe.webglCurrent)
+    {
+        return true;
+    }
+    outReason = "WebGL: no current context";
+    return false;
+#else
+    if (probe.eglCurrent || probe.glxCurrent || probe.wglCurrent || probe.cglCurrent)
+    {
+        return true;
+    }
+
+    std::string reason;
+
+    if (probe.eglAvailable)
+    {
+        reason += "EGL: no current context; ";
+    }
+    else if (probe.eglLibOpened)
+    {
+        reason += "EGL: eglGetCurrentContext missing; ";
+    }
+
+#if !defined(_WIN32) && !defined(__APPLE__) && !defined(__ANDROID__)
+    if (probe.glxAvailable)
+    {
+        reason += "GLX: no current context; ";
+    }
+    else if (probe.glxLibOpened)
+    {
+        reason += "GLX: glXGetCurrentContext missing; ";
+    }
+#endif
+
+#ifdef _WIN32
+    if (probe.wglAvailable)
+    {
+        reason += "WGL: no current context; ";
+    }
+    else if (probe.wglLibOpened)
+    {
+        reason += "WGL: wglGetCurrentContext missing; ";
+    }
+    else
+    {
+        reason += "WGL: opengl32.dll not loaded; ";
+    }
+#endif
+
+#if defined(__APPLE__)
+    if (probe.cglAvailable)
+    {
+        reason += "CGL: no current context; ";
+    }
+    else if (probe.cglLibOpened)
+    {
+        reason += "CGL: CGLGetCurrentContext missing; ";
+    }
+    else
+    {
+        reason += "CGL: CGLGetCurrentContext symbol not available; ";
+    }
+#endif
+
+    if (reason.empty())
+    {
+        // If nothing was available, libraries may not have been opened yet.
+        reason = "No platform current-context query available (libraries not loaded?)";
+    }
+    else
+    {
+        // Trim trailing "; "
+        if (reason.size() >= 2)
+        {
+            reason.resize(reason.size() - 2);
+        }
+    }
+
+    outReason = reason;
+    return false;
 #endif // #ifdef __EMSCRIPTEN__
 }
+
+auto GLResolver::DetectBackend(const CurrentContextProbe& probe) -> void
+{
+#ifdef __EMSCRIPTEN__
+    if (probe.webglCurrent)
+    {
+        m_backend =  Backend::WebGL;
+    }
+    return;
+#else
+    if (probe.eglCurrent)
+    {
+        m_backend = Backend::EGL;
+        return;
+    }
+#ifdef _WIN32
+    if (probe.wglCurrent)
+    {
+        m_backend = Backend::WGL;
+        return;
+    }
+#elif defined(__APPLE__)
+    if (probe.cglCurrent)
+    {
+        m_backend = Backend::CGL;
+        return;
+    }
+#elif !defined(__ANDROID__)
+    if (probe.glxCurrent)
+    {
+        m_backend = Backend::GLX;
+        return;
+    }
+#endif
+    m_backend = Backend::None;
+#endif
+}
+
 
 auto GLResolver::GladResolverThunk(const char* name) -> void*
 {
