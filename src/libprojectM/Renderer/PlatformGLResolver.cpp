@@ -240,16 +240,6 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
         return true;
     }
 
-#ifdef __EMSCRIPTEN__
-    // Use Emscripten static linking path if no user resolver is present. Just don't load anything.
-    if (resolver == nullptr)
-    {
-        m_state.m_backend = Backend::WebGL;
-        m_loaded = true;
-        return true;
-    }
-#endif
-
     m_initializing = true;
 
     m_state.m_userResolver = resolver;
