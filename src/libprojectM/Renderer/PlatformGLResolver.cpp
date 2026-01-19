@@ -99,6 +99,8 @@ auto HasSpaceSeparatedToken(const char* list, const char* token) -> bool
     return false;
 }
 
+#ifndef __EMSCRIPTEN__
+
 /**
  * @brief Heuristically determines whether a name looks like an OpenGL-style extension symbol.
  *
@@ -139,9 +141,6 @@ auto IsLikelyExtensionName(const char* name) -> bool
     }
     return false;
 }
-
-
-#ifndef __EMSCRIPTEN__
 
 /**
  * @brief Returns true if a GL/EGL symbol name is likely to be an extension entry point.
@@ -228,6 +227,16 @@ auto GLResolver::CheckGLRequirementsUnlocked() -> GLContextCheckResult
 
 auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
 {
+#ifdef __EMSCRIPTEN__
+    // Use Emscripten static linking path if no user resolver is present. Just don't load anything.
+    if (resolver == nullptr)
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        m_loaded = true;
+        return true;
+    }
+#endif
+
     // Prevent concurrent Initialize()
     std::unique_lock<std::mutex> lock(m_mutex);
 
@@ -448,6 +457,8 @@ auto GLResolver::GetProcAddress(const char* name) const -> void*
         return resolved;
     }
 
+#ifndef __EMSCRIPTEN__
+
     lock.lock();
 
     // Global symbol table (works if the process already linked/loaded GL libs).
@@ -499,6 +510,7 @@ auto GLResolver::GetProcAddress(const char* name) const -> void*
             return FunctionToSymbol(proc);
         }
     }
+#endif
     return nullptr;
 }
 

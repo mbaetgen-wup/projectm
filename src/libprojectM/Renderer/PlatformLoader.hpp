@@ -276,7 +276,7 @@ public:
     DynamicLibrary(const DynamicLibrary&) = delete;
     DynamicLibrary& operator=(const DynamicLibrary&) = delete;
 
-    inline auto Open(const char* const*, std::string& reason) -> bool
+    inline auto Open(const char* const*, std::string&) -> bool
     {
         return false;
     }
@@ -300,7 +300,7 @@ public:
         return nullptr;
     }
 
-    inline auto SetCloseOnDestruct(bool enabled) -> void
+    inline auto SetCloseOnDestruct(bool) -> void
     {
     }
 
