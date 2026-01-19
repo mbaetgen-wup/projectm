@@ -8,6 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 
 namespace libprojectM
 {
@@ -82,24 +83,36 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *      - EGL: eglGetProcAddress
  *        - Queried for all symbols only when EGL_KHR_get_all_proc_addresses or
  *          EGL_KHR_client_get_all_proc_addresses is advertised.
- *        - Otherwise queried only for extension-style names.
+ *        - Otherwise queried only for extension-style names during the provider step.
+ *        - As a last resort (after exports/global lookups fail), a best-effort call
+ *          to eglGetProcAddress may be attempted even for non-extension names to support
+ *          stacks that expose core client API entry points only via eglGetProcAddress.
  *      - GLX: glXGetProcAddressARB / glXGetProcAddress
  *        - Queried only for glX* or extension-style names.
  *      - WGL: wglGetProcAddress
  *        - Filters sentinel values; prefers exported symbols for core OpenGL 1.1 entry points.
  *  3) Global symbol scope lookup (dlsym(RTLD_DEFAULT) / GetProcAddress on already-loaded modules)
  *  4) Direct exports from explicitly opened libraries (EGL/GL/GLX)
+ *  5) EGL only: Try to resolve function via eglGetProcAddress() as a fallback.
  *
  * Resolution order (Emscripten/WebGL):
  *  1) User resolver callback (if provided)
  *  2) emscripten_webgl2_get_proc_address / emscripten_webgl_get_proc_address
  *     (prefers the current context major version)
  *
+ * ## Loader Flow (Emscripten)
+ *
+* GLResolver::Initialize(userResolver?, userData?)
+ *   |
+ *   +-- Has userResolver
+ *         +-- yes: Store user resolver, will use user resolver + emscripten_webgl*_get_proc_address fallback.
+ *         +-- no: Do not initialize GLAD at all, rely on WebGL static linking.
+ *
  * ## Loader Flow (non-Emscripten)
  *
  * GLResolver::Initialize(userResolver?, userData?)
  *   |
- *   +-- OpenNativeLibraries()                        (best-effort)
+ *   +-- OpenNativeLibraries()
  *   |     +-- open EGL library
  *   |     |     Windows:  libEGL.dll | EGL.dll
  *   |     |     macOS:    libEGL.dylib | libEGL.1.dylib | EGL
@@ -131,7 +144,7 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *   |
  *   +-- DetectBackend()                              (prefers EGL, then WGL/CGL/GLX depending on platform)
  *   |
- *   +-- gladLoadGL(...) / gladLoadGLES2(...)          (GLAD calls back into GLResolver::GetProcAddress)
+ *   +-- gladLoadGL(...) / gladLoadGLES2(...)         (GLAD calls back into GLResolver::GetProcAddress)
  *   |
  *   +-- CheckGLRequirementsUnlocked()
  *   |     Desktop GL: OpenGL >= 3.3
@@ -145,15 +158,17 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *
  * GLResolver::GetProcAddress(name)
  *   |
- *   +-- validates the currently-bound context matches the detected backend
+ *   +-- Validates the currently-bound context matches the detected backend.
  *   |
- *   +-- ResolveUnlocked(name, state)
- *   |     +-- user resolver (if any)
- *   |     +-- provider getProcAddress (backend-aware)
- *   |           EGL  -> eglGetProcAddress (extension-only unless EGL_KHR_*_get_all_proc_addresses)
- *   |           GLX  -> glXGetProcAddress* (glX* and extension-style only)
- *   |           WGL  -> wglGetProcAddress (filters sentinels; may prefer exported symbols)
- *   |           WebGL-> emscripten_webgl*_get_proc_address (Emscripten only)
+ *   +-- User resolver (if any)
+ *   |
+ *   +-- Provider getProcAddress (backend-aware)
+ *   |     EGL  -> eglGetProcAddress (extension-only unless EGL_KHR_*_get_all_proc_addresses)
+ *   |     GLX  -> glXGetProcAddress* (glX* and extension-style only)
+ *   |     WGL  -> wglGetProcAddress (filters sentinels; may prefer exported symbols)
+ *   |     WebGL-> emscripten_webgl*_get_proc_address (Emscripten only)
+ *   |
+ *   +-- If Emscripten -> All available lookups have been tried, return nullptr.
  *   |
  *   +-- DynamicLibrary::FindGlobalSymbol(name)
  *   |
@@ -162,8 +177,10 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *   |     m_glLib.GetSymbol(name)
  *   |     m_glxLib.GetSymbol(name)
  *   |
+ *   +-- Late best-effort eglGetProcAddress() fallback (EGL only).
+ *   |
  *   \/
- *   nullptr
+ *  nullptr
  */
 class GLResolver
 {
@@ -195,9 +212,7 @@ public:
      * This method must be called at least once before GetProcAddress() is used.
      *
      * Thread-safety: Initialize() is internally synchronized. Intended usage is to initialize
-     * once during startup before any resolution occurs. GetProcAddress() assumes
-     * initialization has completed successfully (per API contract) and does not wait
-     * for an in-flight Initialize() call.
+     * once during startup before any resolution occurs. GetProcAddress() should not be called until Initialize() has completed.
      *
      * May be called multiple times; initialization work is performed only when needed.
      *
