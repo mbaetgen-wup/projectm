@@ -90,23 +90,32 @@ namespace Platform {
  * @brief Platform library handle type.
  */
 #ifdef _WIN32
+
 using LibHandle = HMODULE;
+
 #else
+
 using LibHandle = void*;
+
 #endif
 
 // -------------------------------------------------------------------------
 // Common (Windows / POSIX / Emscripten)
 // -------------------------------------------------------------------------
 
-inline auto TrimTrailingWhitespace(std::string& s) -> void
+/**
+ * Removes all trailing whitespaces for the given string.
+ *
+ * @param str Input string.
+ */
+inline auto TrimTrailingWhitespace(std::string& str) -> void
 {
-    while (!s.empty())
+    while (!str.empty())
     {
-        const char c = s.back();
+        const char c = str.back();
         if (c == '\r' || c == '\n' || c == ' ' || c == '\t')
         {
-            s.pop_back();
+            str.pop_back();
             continue;
         }
         break;
@@ -235,8 +244,8 @@ auto FunctionToInteger(Fn func) -> std::uintptr_t
     return value;
 }
 
-
 #ifdef _WIN32
+
 /**
  * @brief Converts a Windows FARPROC into the generic symbol representation (void*) (best-effort).
  *
@@ -342,9 +351,11 @@ public:
     DynamicLibrary(DynamicLibrary&& other) noexcept
         : m_handle(other.m_handle)
         , m_loadedName(std::move(other.m_loadedName))
+        , m_closeOnDestruct(other.m_closeOnDestruct)
     {
         other.m_handle = nullptr;
         other.m_loadedName.clear();
+        other.m_closeOnDestruct = false;
     }
 
     auto operator=(DynamicLibrary&& other) noexcept -> DynamicLibrary&
@@ -354,8 +365,10 @@ public:
             Close();
             m_handle = other.m_handle;
             m_loadedName = std::move(other.m_loadedName);
+            m_closeOnDestruct = other.m_closeOnDestruct;
             other.m_handle = nullptr;
             other.m_loadedName.clear();
+            other.m_closeOnDestruct = false;
         }
         return *this;
     }
@@ -386,6 +399,7 @@ public:
             }
 
 #ifdef _WIN32
+
             // DLL loading policy:
             //  - Prefer LoadLibraryExA with LOAD_LIBRARY_SEARCH_* flags to avoid CWD/PATH hijacking.
             //  - If the OS loader doesn't support the flags (ERROR_INVALID_PARAMETER), fall back to:
@@ -562,9 +576,12 @@ public:
             }
 
             m_handle = handle;
+
 #else
+
             ::dlerror(); // clear any prior error
             m_handle = ::dlopen(name, RTLD_NOW | RTLD_LOCAL);
+
 #endif
 
             if (m_handle != nullptr)
@@ -574,6 +591,7 @@ public:
             }
 
 #ifdef _WIN32
+
             {
                 const DWORD err = ::GetLastError();
 
@@ -604,7 +622,9 @@ public:
                     ::LocalFree(msg);
                 }
             }
+
 #else
+
         const char* err = ::dlerror();
         if (err != nullptr)
         {
@@ -613,7 +633,9 @@ public:
             reason += ": ";
             reason += err;
         }
+
 #endif
+
         } // for loop
 
         return false;
@@ -630,10 +652,15 @@ public:
         }
 
 #ifdef _WIN32
+
         ::FreeLibrary(m_handle);
+
 #else
+
         ::dlclose(m_handle);
+
 #endif
+
         m_handle = nullptr;
         m_loadedName.clear();
     }
@@ -687,8 +714,11 @@ public:
         }
 
 #ifdef _WIN32
+
         return WinProcToSymbol(::GetProcAddress(m_handle, name));
+
 #else
+
         // clear any prior error
         ::dlerror();
         void* sym = ::dlsym(m_handle, name);
@@ -698,7 +728,9 @@ public:
             return nullptr;
         }
         return sym;
+
 #endif
+
     }
 
     /**
@@ -715,6 +747,7 @@ public:
         }
 
 #ifdef _WIN32
+
         // Search the main executable first.
         if (HMODULE mainModule = ::GetModuleHandleA(nullptr))
         {
@@ -760,7 +793,9 @@ public:
         }
 
         return nullptr;
+
 #else
+
         // clear any prior error
         ::dlerror();
         void* sym = ::dlsym(RTLD_DEFAULT, name);
@@ -770,7 +805,9 @@ public:
             return nullptr;
         }
         return sym;
+
 #endif
+
     }
 
 private:

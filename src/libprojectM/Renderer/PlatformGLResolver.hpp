@@ -8,7 +8,18 @@
 #include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
+
+// Optional GLX fallback for resolving non-extension gl* names via glXGetProcAddress*.
+//
+// Default behavior is conservative: only extension-style names are resolved via
+// glXGetProcAddress*, because some implementations return non-null for unknown
+// symbols which may crash when called.
+//
+// If support for legacy/non-GLVND stacks is required where some core entry points are not
+// exported from libGL/libOpenGL, you may enable this as a last-resort fallback.
+#ifndef PLATFORM_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK
+#define PLATFORM_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK 0
+#endif
 
 namespace libprojectM
 {
@@ -76,6 +87,7 @@ using UserResolver = void* (*)(const char* name, void* userData);
  * Initialization:
  *  - Must be called after a context is created and made current on the calling thread.
  *  - Thread-safe; intended to be called once during startup before any resolution occurs.
+ *  - If multiple backends appear to be current, EGL is preferred.
  *
  * Resolution order (non-Emscripten):
  *  1) User resolver callback (if provided)
@@ -88,25 +100,23 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *          to eglGetProcAddress may be attempted even for non-extension names to support
  *          stacks that expose core client API entry points only via eglGetProcAddress.
  *      - GLX: glXGetProcAddressARB / glXGetProcAddress
- *        - Queried only for glX* or extension-style names.
+ *        - Queried only for glX* or extension-style names (default).
+ *        - Optional: as a last resort, non-extension gl* names can be queried when
+ *          PLATFORM_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK is enabled.
  *      - WGL: wglGetProcAddress
  *        - Filters sentinel values; prefers exported symbols for core OpenGL 1.1 entry points.
  *  3) Global symbol scope lookup (dlsym(RTLD_DEFAULT) / GetProcAddress on already-loaded modules)
  *  4) Direct exports from explicitly opened libraries (EGL/GL/GLX)
- *  5) EGL only: Try to resolve function via eglGetProcAddress() as a fallback.
+ *  5) Fallback
+ *     - EGL: Try to resolve function via eglGetProcAddress as fallback.
+ *            Always enabled.
+ *     - GLX: Try to resolve function via glXGetProcAddress as fallback.
+ *            Optional, enabled via PLATFORM_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK.
  *
  * Resolution order (Emscripten/WebGL):
  *  1) User resolver callback (if provided)
  *  2) emscripten_webgl2_get_proc_address / emscripten_webgl_get_proc_address
  *     (prefers the current context major version)
- *
- * ## Loader Flow (Emscripten)
- *
-* GLResolver::Initialize(userResolver?, userData?)
- *   |
- *   +-- Has userResolver
- *         +-- yes: Store user resolver, will use user resolver + emscripten_webgl*_get_proc_address fallback.
- *         +-- no: Do not initialize GLAD at all, rely on WebGL static linking.
  *
  * ## Loader Flow (non-Emscripten)
  *
@@ -146,7 +156,7 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *   |
  *   +-- gladLoadGL(...) / gladLoadGLES2(...)         (GLAD calls back into GLResolver::GetProcAddress)
  *   |
- *   +-- CheckGLRequirementsUnlocked()
+ *   +-- CheckGLRequirements()
  *   |     Desktop GL: OpenGL >= 3.3
  *   |     GLES:       OpenGL ES >= 3.0
  *   |
@@ -327,17 +337,26 @@ private:
         EglGetProcAddressFn m_eglGetProcAddress{nullptr};               //!< eglGetProcAddress handle.
         bool m_eglGetAllProcAddresses{false};                           //!< True if EGL_KHR_get_all_proc_addresses (or client variant) is advertised.
         EglGetCurrentContextFn m_eglGetCurrentContext{nullptr};         //!< eglGetCurrentContext handle.
+
 #ifdef _WIN32
+
         WglGetProcAddressFn m_wglGetProcAddress{nullptr};               //!< wglGetProcAddress handle.
         WglGetCurrentContextFn m_wglGetCurrentContext{nullptr};         //!< wglGetCurrentContext handle.
+
 #elif defined(__APPLE__)
+
         CglGetCurrentContextFn m_cglGetCurrentContext{nullptr};         //!< CGLGetCurrentContext handle.
+
 #elif !defined(__ANDROID__)
+
         GlxGetProcAddressFn m_glxGetProcAddress{nullptr};               //!< glXGetProcAddress* handle.
         GlxGetCurrentContextFn m_glxGetCurrentContext{nullptr};         //!< glXGetCurrentContext handle.
+
 #else
+
 #endif
-    };
+
+    }; // struct ResolverState
 
     auto OpenNativeLibraries() -> void;
     auto ResolveProviderFunctions() -> void;
@@ -345,6 +364,7 @@ private:
     auto HasCurrentContext(const CurrentContextProbe& probe, std::string& outReason) -> bool;
     auto DetectBackend(const CurrentContextProbe& probe) -> void;
     auto CheckGLRequirementsUnlocked() -> GLContextCheckResult;
+    bool VerifyBackendIsCurrent(const ResolverState& state, const CurrentContextProbe& currentContext) const;
     auto static LoadGladUnlocked(const ResolverState& state) -> bool;
     static auto ResolveUnlocked(const char* name, const ResolverState& state) -> void*;
 
