@@ -271,12 +271,18 @@ class DynamicLibrary
 {
 public:
     DynamicLibrary() = default;
-    ~DynamicLibrary() = default;
+    ~DynamicLibrary()
+    {
+        if (m_closeOnDestruct)
+        {
+            Close();
+        }
+    }
 
     DynamicLibrary(const DynamicLibrary&) = delete;
     DynamicLibrary& operator=(const DynamicLibrary&) = delete;
 
-    inline auto Open(const char* const*, std::string& reason) -> bool
+    inline auto Open(const char* const*, std::string&) -> bool
     {
         return false;
     }
@@ -300,7 +306,7 @@ public:
         return nullptr;
     }
 
-    inline auto SetCloseOnDestruct(bool enabled) -> void
+    inline auto SetCloseOnDestruct(bool) -> void
     {
     }
 
@@ -328,7 +334,13 @@ class DynamicLibrary
 public:
     DynamicLibrary() = default;
 
-    ~DynamicLibrary() = default;
+    ~DynamicLibrary()
+    {
+        if (m_closeOnDestruct)
+        {
+            Close();
+        }
+    }
 
     DynamicLibrary(const DynamicLibrary&) = delete;
     auto operator=(const DynamicLibrary&) -> DynamicLibrary& = delete;
@@ -487,21 +499,36 @@ public:
                 // explicit full path improves dependency resolution by allowing the loader to search
                 // the DLL's directory for its dependent DLLs (LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR).
                 // This keeps the search path restricted without changing process-wide state.
-                const std::string appFull = buildAppDirPath(name);
-                if (!appFull.empty())
+                const bool isSystemOpenGL32 = (_stricmp(name, "opengl32.dll") == 0);
+
+                // For system DLLs like opengl32.dll, never prefer the application directory.
+                // Loading system DLLs from app-local paths enables DLL preloading/hijacking.
+                std::string appFull;
+                if (!isSystemOpenGL32)
                 {
-                    handle = tryLoadEx(appFull.c_str(), LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-                    if (handle == nullptr && ::GetLastError() == ERROR_INVALID_PARAMETER)
+                    appFull = buildAppDirPath(name);
+                    if (!appFull.empty())
                     {
-                        // Older OS loader: use altered search path for absolute paths to improve
-                        // dependent DLL resolution.
-                        handle = tryLoadExplicitPathFallback(appFull.c_str());
+                        handle = tryLoadEx(appFull.c_str(), LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+                        if (handle == nullptr && ::GetLastError() == ERROR_INVALID_PARAMETER)
+                        {
+                            // Older OS loader: use altered search path for absolute paths to improve
+                            // dependent DLL resolution.
+                            handle = tryLoadExplicitPathFallback(appFull.c_str());
+                        }
                     }
                 }
 
                 if (handle == nullptr)
                 {
-                    handle = tryLoadEx(name, LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+                    if (isSystemOpenGL32)
+                    {
+                        handle = tryLoadEx(name, LOAD_LIBRARY_SEARCH_SYSTEM32);
+                    }
+                    else
+                    {
+                        handle = tryLoadEx(name, LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+                    }
                 }
 
                 if (handle == nullptr && ::GetLastError() == ERROR_INVALID_PARAMETER)
@@ -642,6 +669,17 @@ public:
     }
 
     /**
+     * @brief Controls whether the library is closed in the destructor.
+     *
+     * The default is false to avoid unloading GL/driver libraries during process teardown.
+     * Enable only for short-lived helper loads where unloading is safe and desired.
+     */
+    auto SetCloseOnDestruct(bool enabled) -> void
+    {
+        m_closeOnDestruct = enabled;
+    }
+
+    /**
      * @brief Resolves a symbol from this library.
      * @param name The symbol name.
      *
@@ -742,8 +780,9 @@ public:
     }
 
 private:
-    LibHandle m_handle{};         //!< Library handle used to access the system library.
-    std::string m_loadedName;     //< Successfully opened library name.
+    LibHandle m_handle{};           //!< Library handle used to access the system library.
+    std::string m_loadedName;       //< Successfully opened library name.
+    bool m_closeOnDestruct{false};  //!< If true, Close() is called from the destructor.
 };
 
 #endif // #ifdef __EMSCRIPTEN__

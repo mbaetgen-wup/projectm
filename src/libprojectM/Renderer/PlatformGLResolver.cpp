@@ -16,8 +16,11 @@
 #include <cstring>
 #include <cstdint>
 #include <cstdio>
+
+#ifdef _WIN32
 #include <cstdlib>
 #include <limits>
+#endif
 
 #ifdef _WIN32
 #include <windows.h>
@@ -99,6 +102,8 @@ auto HasSpaceSeparatedToken(const char* list, const char* token) -> bool
     return false;
 }
 
+#ifndef __EMSCRIPTEN__
+
 /**
  * @brief Heuristically determines whether a name looks like an OpenGL-style extension symbol.
  *
@@ -140,17 +145,8 @@ auto IsLikelyExtensionName(const char* name) -> bool
     return false;
 }
 
-
-#ifndef __EMSCRIPTEN__
-
 /**
  * @brief Returns true if a GL/EGL symbol name is likely to be an extension entry point.
- *
- * Per EGL_KHR_get_all_proc_addresses (and its client variant), eglGetProcAddress
- * is not required to return addresses for non-extension EGL or client API functions
- * unless the extension is advertised. When the extension is not available, a
- * conservative policy is to query eglGetProcAddress only for extension-style
- * entry points (ARB/EXT/KHR/etc.), while resolving core symbols via direct exports.
  */
 auto ShouldUseEglGetProcAddressForName(const char* name) -> bool
 {
@@ -228,6 +224,7 @@ auto GLResolver::CheckGLRequirementsUnlocked() -> GLContextCheckResult
 
 auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
 {
+
     // Prevent concurrent Initialize()
     std::unique_lock<std::mutex> lock(m_mutex);
 
@@ -242,6 +239,16 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
     {
         return true;
     }
+
+#ifdef __EMSCRIPTEN__
+    // Use Emscripten static linking path if no user resolver is present. Just don't load anything.
+    if (resolver == nullptr)
+    {
+        m_state.m_backend = Backend::WebGL;
+        m_loaded = true;
+        return true;
+    }
+#endif
 
     m_initializing = true;
 
@@ -382,10 +389,14 @@ auto GLResolver::GetProcAddress(const char* name) const -> void*
     // Only hold m_mutex while reading internal state.
     std::unique_lock<std::mutex> lock(m_mutex);
 
+    if (!m_loaded)
+    {
+        LOG_ERROR(std::string("[GLResolver] GetProcAddress called without initialization."));
+        return nullptr;
+    }
+
     // Local state copy to use once the lock is released.
     const auto state = m_state;
-
-    const bool loaded = m_loaded;
 
     // Gate to detected backend.
     const auto currentContext = ProbeCurrentContext();
@@ -430,14 +441,7 @@ auto GLResolver::GetProcAddress(const char* name) const -> void*
             }
         break;
         default:
-            if (!loaded)
-            {
-                LOG_ERROR(std::string("[GLResolver] Backend is not initialized."));
-            }
-            else
-            {
-                LOG_ERROR(std::string("[GLResolver] Initialization did not choose a valid backend."));
-            }
+            LOG_ERROR(std::string("[GLResolver] Initialization did not choose a valid backend."));
         return nullptr;
     }
 
@@ -447,6 +451,8 @@ auto GLResolver::GetProcAddress(const char* name) const -> void*
     {
         return resolved;
     }
+
+#ifndef __EMSCRIPTEN__
 
     lock.lock();
 
@@ -499,6 +505,7 @@ auto GLResolver::GetProcAddress(const char* name) const -> void*
             return FunctionToSymbol(proc);
         }
     }
+#endif
     return nullptr;
 }
 
@@ -671,7 +678,7 @@ void GLResolver::ResolveProviderFunctions()
         constexpr int kEglExtensions = 0x3055; // EGL_EXTENSIONS
         constexpr int kEglSuccess = 0x3000; // EGL_SUCCESS
         constexpr int kEglBadDisplay = 0x3008; // EGL_BAD_DISPLAY
-        constexpr EglDisplay kEglNoDisplay = nullptr; // EGL_NO_DISPLAY
+        EglDisplay kEglNoDisplay = nullptr; // EGL_NO_DISPLAY
 
         void* querySym = nullptr;
         if (m_eglLib.IsOpen())
@@ -1230,7 +1237,9 @@ auto GLResolver::ResolveUnlocked(const char* name, const ResolverState& state) -
             // wglGetProcAddress can return special sentinel values (1,2,3,-1) for core symbols.
             // Treat those as invalid and allow fallback to GetProcAddress/dlsym paths.
             const std::uintptr_t raw = FunctionToInteger(proc);
-            if (raw != 1u && raw != 2u && raw != 3u && raw != std::numeric_limits<std::uintptr_t>::max())
+            // FunctionToInteger returns 0 on non-representable conversions (e.g. function pointers wider than void*).
+            // Treat that as invalid and allow fallback to exported symbols.
+            if (raw != 0u && raw != 1u && raw != 2u && raw != 3u && raw != std::numeric_limits<std::uintptr_t>::max())
             {
                 // Prefer exports from opengl32.dll for core OpenGL 1.1 entry points.
                 // In the wild, wglGetProcAddress may return a non-null pointer for some core symbols
