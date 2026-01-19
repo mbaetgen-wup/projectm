@@ -389,7 +389,7 @@ auto GLResolver::GetProcAddress(const char* name) const -> void*
     // Only hold m_mutex while reading internal state.
     std::unique_lock<std::mutex> lock(m_mutex);
 
-    if (!m_loaded)
+    if (!m_loaded && !m_initializing)
     {
         LOG_ERROR(std::string("[GLResolver] GetProcAddress called without initialization."));
         return nullptr;
