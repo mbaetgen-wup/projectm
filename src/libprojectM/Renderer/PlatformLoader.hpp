@@ -271,13 +271,7 @@ class DynamicLibrary
 {
 public:
     DynamicLibrary() = default;
-    ~DynamicLibrary()
-    {
-        if (m_closeOnDestruct)
-        {
-            Close();
-        }
-    }
+    ~DynamicLibrary() = default;
 
     DynamicLibrary(const DynamicLibrary&) = delete;
     DynamicLibrary& operator=(const DynamicLibrary&) = delete;
