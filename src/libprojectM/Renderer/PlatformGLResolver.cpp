@@ -1,6 +1,3 @@
-// Cross-platform runtime GL/GLES loader using GLAD2 C API (non-MX).
-//
-// Provides a universal resolver to find GL function pointers.
 
 #include "PlatformGLResolver.hpp"
 
@@ -303,7 +300,16 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
 #elif !defined(__APPLE__) && !defined(__ANDROID__)
 
         diag += std::string(" glx_get_proc=\"") + (m_state.m_glxGetProcAddress != nullptr ? "yes" : "no") + "\"";
+
+#if PLATFORM_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK
+
+        diag += " glx_policy=\"ext+fallback\"";
+
+#else
+
         diag += " glx_policy=\"ext-only\"";
+
+#endif
 
 #endif
 

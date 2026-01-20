@@ -1,7 +1,5 @@
 #pragma once
 
-#include <array>
-#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -9,7 +7,12 @@
 #include <type_traits>
 
 #ifndef __EMSCRIPTEN__
+
 #ifdef _WIN32
+
+#include <array>
+#include <cstddef>
+
 #include <windows.h>
 
 // -------------------------------------------------------------------------
@@ -48,12 +51,18 @@
 //
 // Define PLATFORM_ALLOW_UNSAFE_DLL_SEARCH=1 to re-enable the legacy fallback.
 #ifndef PLATFORM_ALLOW_UNSAFE_DLL_SEARCH
+
 #define PLATFORM_ALLOW_UNSAFE_DLL_SEARCH 0
+
 #endif
-#else
+
+#else // #ifdef _WIN32
+
 #include <dlfcn.h>
-#endif
-#endif
+
+#endif // #ifdef _WIN32
+
+#endif // #ifndef __EMSCRIPTEN__
 
 // -------------------------------------------------------------------------
 // Minimal EGL calling-convention support
@@ -66,9 +75,13 @@
 // This macro is used in our local EGL function pointer typedefs to ensure we
 // call into the provider (ANGLE / driver EGL) using the correct ABI.
 #if defined(_WIN32) && !defined(_WIN64)
+
 #define PLATFORM_EGLAPIENTRY __stdcall
+
 #else
+
 #define PLATFORM_EGLAPIENTRY
+
 #endif
 
 // -------------------------------------------------------------------------
@@ -123,6 +136,7 @@ inline auto TrimTrailingWhitespace(std::string& str) -> void
 }
 
 #if PLATFORM_LOADER_DIAGNOSTICS
+
 inline auto ReportFnPtrSizeMismatch(const char* where, std::size_t fnSize, std::size_t ptrSize) -> void
 {
     std::fprintf(stderr, "[PlatformLoader] %s: sizeof(Fn)=%zu sizeof(void*)=%zu; cannot convert symbol/function pointer\n",
@@ -130,6 +144,7 @@ inline auto ReportFnPtrSizeMismatch(const char* where, std::size_t fnSize, std::
                  static_cast<std::size_t>(fnSize),
                  static_cast<std::size_t>(ptrSize));
 }
+
 #endif
 
 /**
@@ -162,9 +177,13 @@ auto SymbolToFunction(void* symbol) -> Fn
 
     if (sizeof(Fn) != sizeof(void*))
     {
+
 #if PLATFORM_LOADER_DIAGNOSTICS
+
         ReportFnPtrSizeMismatch("SymbolToFunction", sizeof(Fn), sizeof(void*));
+
 #endif
+
         return nullptr;
     }
 
@@ -197,9 +216,13 @@ auto FunctionToSymbol(Fn func) -> void*
 
     if (sizeof(Fn) != sizeof(void*))
     {
+
 #if PLATFORM_LOADER_DIAGNOSTICS
+
         ReportFnPtrSizeMismatch("FunctionToSymbol", sizeof(Fn), sizeof(void*));
+
 #endif
+
         return nullptr;
     }
 
@@ -228,9 +251,13 @@ auto FunctionToInteger(Fn func) -> std::uintptr_t
 
     if (sizeof(Fn) != sizeof(void*))
     {
+
 #if PLATFORM_LOADER_DIAGNOSTICS
+
         ReportFnPtrSizeMismatch("FunctionToInteger", sizeof(Fn), sizeof(void*));
+
 #endif
+
         return 0;
     }
 
@@ -269,6 +296,7 @@ inline auto WinProcToSymbol(FARPROC proc) noexcept -> void*
     std::memcpy(&sym, &proc, sizeof(void*));
     return sym;
 }
+
 #endif
 
 #ifdef __EMSCRIPTEN__
@@ -319,12 +347,8 @@ public:
     }
 };
 
-inline auto IsCurrentEgl(const DynamicLibrary&) -> bool
-{
-    return false;
-}
-
 #else // #ifdef __EMSCRIPTEN__
+
 // -------------------------------------------------------------------------
 // Native implementation (Windows / POSIX)
 // -------------------------------------------------------------------------

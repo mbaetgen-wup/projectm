@@ -73,7 +73,7 @@ enum class Backend : std::uint8_t
 using UserResolver = void* (*)(const char* name, void* userData);
 
 /**
- * @brief Cross-platform runtime GL/GLES procedure resolver.
+ * @brief Universal cross-platform runtime GL/GLES procedure resolver for GLAD2 (non-MX).
  *
  * Compile-time API selection:
  *  - If USE_GLES is defined, loads OpenGL ES entry points via gladLoadGLES2() and
@@ -84,9 +84,14 @@ using UserResolver = void* (*)(const char* name, void* userData);
  * Supported backends/wrappers: EGL (including ANGLE), GLX (including libGLVND), WGL,
  * macOS CGL, WebGL (Emscripten), plus an optional user resolver.
  *
+ * Lifecycle:
+ *  - The resolver is a process-singleton.
+ *  - GL libraries that have been opened are not unloaded to avoid conflicts with the host app.
+ *    They will be released by OS during process tear-down.
+ *
  * Initialization:
  *  - Must be called after a context is created and made current on the calling thread.
- *  - Thread-safe; intended to be called once during startup before any resolution occurs.
+ *  - Thread-safe; intended to be called during startup before any resolution occurs.
  *  - If multiple backends appear to be current, EGL is preferred.
  *
  * Resolution order (non-Emscripten):
@@ -96,18 +101,13 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *        - Queried for all symbols only when EGL_KHR_get_all_proc_addresses or
  *          EGL_KHR_client_get_all_proc_addresses is advertised.
  *        - Otherwise queried only for extension-style names during the provider step.
- *        - As a last resort (after exports/global lookups fail), a best-effort call
- *          to eglGetProcAddress may be attempted even for non-extension names to support
- *          stacks that expose core client API entry points only via eglGetProcAddress.
  *      - GLX: glXGetProcAddressARB / glXGetProcAddress
- *        - Queried only for glX* or extension-style names (default).
- *        - Optional: as a last resort, non-extension gl* names can be queried when
- *          PLATFORM_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK is enabled.
+ *        - Queried only for glX* or extension-style names.
  *      - WGL: wglGetProcAddress
  *        - Filters sentinel values; prefers exported symbols for core OpenGL 1.1 entry points.
  *  3) Global symbol scope lookup (dlsym(RTLD_DEFAULT) / GetProcAddress on already-loaded modules)
  *  4) Direct exports from explicitly opened libraries (EGL/GL/GLX)
- *  5) Fallback
+ *  5) GetProcAddress fallback
  *     - EGL: Try to resolve function via eglGetProcAddress as fallback.
  *            Always enabled.
  *     - GLX: Try to resolve function via glXGetProcAddress as fallback.
@@ -270,6 +270,7 @@ public:
 private:
 
     // Basic EGL access signatures.
+
     using EglProc = void (PLATFORM_EGLAPIENTRY*)();
     using EglGetProcAddressFn = EglProc (PLATFORM_EGLAPIENTRY*)(const char* name);
     using EglGetCurrentContextFn = void* (PLATFORM_EGLAPIENTRY*)();
