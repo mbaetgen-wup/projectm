@@ -95,7 +95,7 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *  - If multiple backends appear to be current, EGL is preferred.
  *
  * Resolution order (non-Emscripten):
- *  1) User resolver callback (if provided)
+ *  1) User resolver callback (if provided, resolution continues if user provider returns a nullptr)
  *  2) Backend provider:
  *      - EGL: eglGetProcAddress
  *        - Queried for all symbols only when EGL_KHR_get_all_proc_addresses or
@@ -157,7 +157,7 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *   +-- gladLoadGL(...) / gladLoadGLES2(...)         (GLAD calls back into GLResolver::GetProcAddress)
  *   |
  *   +-- CheckGLRequirements()
- *   |     Desktop GL: OpenGL >= 3.3
+ *   |     Desktop GL: OpenGL    >= 3.3
  *   |     GLES:       OpenGL ES >= 3.0
  *   |
  *   +-- if ready:
@@ -168,7 +168,7 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *
  * GLResolver::GetProcAddress(name)
  *   |
- *   +-- Validates the currently-bound context matches the detected backend.
+ *   +-- Validate if the currently-bound context matches the detected backend.
  *   |
  *   +-- User resolver (if any)
  *   |
@@ -178,7 +178,7 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *   |     WGL  -> wglGetProcAddress (filters sentinels; may prefer exported symbols)
  *   |     WebGL-> emscripten_webgl*_get_proc_address (Emscripten only)
  *   |
- *   +-- If Emscripten -> All available lookups have been tried, return nullptr.
+ *   +-- If Emscripten -> All available lookups have been tried -> Not Found (nullptr)
  *   |
  *   +-- DynamicLibrary::FindGlobalSymbol(name)
  *   |
@@ -187,10 +187,11 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *   |     m_glLib.GetSymbol(name)
  *   |     m_glxLib.GetSymbol(name)
  *   |
- *   +-- Late best-effort eglGetProcAddress() fallback (EGL only).
+ *   +-- Late best-effort eglGetProcAddress fallback (EGL only)
+ *   |                    glXGetProcAddress fallback (GLX only, disabled per default)
  *   |
- *   \/
- *  nullptr
+ *  \/
+ * Not Found (nullptr)
  */
 class GLResolver
 {
