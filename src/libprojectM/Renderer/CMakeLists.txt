@@ -36,6 +36,7 @@ add_library(Renderer OBJECT
         PlatformGLContextCheck.hpp
         PlatformGLResolver.cpp
         PlatformGLResolver.hpp
+        PlatformLoader.cpp
         PlatformLoader.hpp
         Point.hpp
         PresetTransition.cpp

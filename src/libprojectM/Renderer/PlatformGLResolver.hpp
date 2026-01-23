@@ -379,7 +379,7 @@ private:
     DynamicLibrary m_glLib;                                         //!< GL library handle. Optional, may be empty.
     DynamicLibrary m_glxLib;                                        //!< GLX library handle. Optional, may be empty.
 
-    ResolverState m_state;
+    ResolverState m_state;                                          //!< Resolver properties and resolved pointers.
 };
 
 /**
