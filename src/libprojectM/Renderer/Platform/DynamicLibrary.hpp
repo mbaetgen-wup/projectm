@@ -11,25 +11,6 @@
 
 #include <windows.h>
 
-// -------------------------------------------------------------------------
-// Optional legacy DLL search fallback
-// -------------------------------------------------------------------------
-//
-// If the OS loader does not support LOAD_LIBRARY_SEARCH_* flags (ERROR_INVALID_PARAMETER),
-// this loader tries to load from explicit safe locations (application directory and
-// System32 for known system DLLs).
-//
-// As a last resort, some applications may still want to fall back to LoadLibrary(name)
-// (which can consult legacy search paths such as the process current working directory).
-// This is disabled by default for security hardening.
-//
-// Define PLATFORM_ALLOW_UNSAFE_DLL_SEARCH=1 to re-enable the legacy fallback.
-#ifndef PLATFORM_ALLOW_UNSAFE_DLL_SEARCH
-
-#define PLATFORM_ALLOW_UNSAFE_DLL_SEARCH 0
-
-#endif
-
 #else // #ifdef _WIN32
 
 #include <dlfcn.h>
@@ -62,11 +43,11 @@
 // Optional loader diagnostics
 // -------------------------------------------------------------------------
 //
-// When enabled, the loader prints best-effort diagnostics for unusual ABI
+// When enabled, the loader prints diagnostics for unusual ABI
 // situations (e.g., platforms where data pointers and function pointers have
 // different representations/sizes). Disabled by default to avoid noisy output.
-#ifndef PLATFORM_LOADER_DIAGNOSTICS
-#define PLATFORM_LOADER_DIAGNOSTICS 0
+#ifndef GLRESOLVER_LOADER_DIAGNOSTICS
+#define GLRESOLVER_LOADER_DIAGNOSTICS 0
 #endif
 
 namespace libprojectM {
@@ -86,7 +67,7 @@ using LibHandle = void*;
 
 #endif
 
-#if PLATFORM_LOADER_DIAGNOSTICS
+#if GLRESOLVER_LOADER_DIAGNOSTICS
 
 inline auto ReportFnPtrSizeMismatch(const char* where, std::size_t fnSize, std::size_t ptrSize) -> void
 {
@@ -99,7 +80,7 @@ inline auto ReportFnPtrSizeMismatch(const char* where, std::size_t fnSize, std::
 #endif
 
 /**
- * @brief Converts a symbol pointer (void*) into a function pointer type (best-effort).
+ * @brief Converts a symbol pointer (void*) into a function pointer type .
  *
  * dlsym/GetProcAddress return untyped procedure addresses (void* on POSIX, FARPROC on Windows). Converting those to function
  * pointers via reinterpret_cast is not guaranteed to be portable in ISO C++.
@@ -129,7 +110,7 @@ auto SymbolToFunction(void* symbol) -> Fn
     if (sizeof(Fn) != sizeof(void*))
     {
 
-#if PLATFORM_LOADER_DIAGNOSTICS
+#if GLRESOLVER_LOADER_DIAGNOSTICS
 
         ReportFnPtrSizeMismatch("SymbolToFunction", sizeof(Fn), sizeof(void*));
 
@@ -144,7 +125,7 @@ auto SymbolToFunction(void* symbol) -> Fn
 }
 
 /**
- * @brief Converts a function pointer into a symbol pointer representation (best-effort).
+ * @brief Converts a function pointer into a symbol pointer representation .
  *
  * The inverse of SymbolToFunction(). This is used at API boundaries where legacy
  * interfaces represent procedure addresses as void*.
@@ -168,7 +149,7 @@ auto FunctionToSymbol(Fn func) -> void*
     if (sizeof(Fn) != sizeof(void*))
     {
 
-#if PLATFORM_LOADER_DIAGNOSTICS
+#if GLRESOLVER_LOADER_DIAGNOSTICS
 
         ReportFnPtrSizeMismatch("FunctionToSymbol", sizeof(Fn), sizeof(void*));
 
@@ -183,7 +164,7 @@ auto FunctionToSymbol(Fn func) -> void*
 }
 
 /**
- * @brief Converts a function pointer into an integer representation (best-effort).
+ * @brief Converts a function pointer into an integer representation .
  *
  * Useful for validating platform-specific sentinel values (e.g. Windows WGL).
  * Returns 0 if the conversion is not representable.
@@ -203,7 +184,7 @@ auto FunctionToInteger(Fn func) -> std::uintptr_t
     if (sizeof(Fn) != sizeof(void*))
     {
 
-#if PLATFORM_LOADER_DIAGNOSTICS
+#if GLRESOLVER_LOADER_DIAGNOSTICS
 
         ReportFnPtrSizeMismatch("FunctionToInteger", sizeof(Fn), sizeof(void*));
 
@@ -222,10 +203,15 @@ auto FunctionToInteger(Fn func) -> std::uintptr_t
     return value;
 }
 
+/**
+ * @brief Parses a bool-ish env var. Truthy: 1, y, yes, t, true, on (case-insensitive). Falsy: 0, n, no, f, false, off.
+ */
+auto EnvFlagEnabled(const char* name, bool defaultValue) -> bool;
+
 #ifdef _WIN32
 
 /**
- * @brief Converts a Windows FARPROC into the generic symbol representation (void*) (best-effort).
+ * @brief Converts a Windows FARPROC into the generic symbol representation (void*) .
  *
  * Windows GetProcAddress returns a function pointer type (FARPROC). To avoid relying on a direct
  * reinterpret_cast between function pointers and object pointers, this helper copies the bit pattern

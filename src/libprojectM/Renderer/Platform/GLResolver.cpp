@@ -1,11 +1,5 @@
 
-#include "PlatformGLResolver.hpp"
-
-#include "OpenGL.h"
-#include "PlatformGLContextCheck.hpp"
-
-#include "SOIL2/SOIL2.h"
-#include "SOIL2/SOIL2_gl_bridge.h"
+#include "GLResolver.hpp"
 
 #include <Logging.hpp>
 
@@ -13,9 +7,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 
 #ifdef _WIN32
-#include <cstdlib>
 #include <limits>
 #endif
 
@@ -33,6 +27,39 @@ namespace Renderer {
 namespace Platform {
 
 namespace {
+
+
+auto StrictContextGateEnabled() -> bool
+{
+    static const bool enabled = EnvFlagEnabled("GLRESOLVER_STRICT_CONTEXT_GATE", true);
+    return enabled;
+}
+
+#if defined(__APPLE__)
+
+auto PreferCglOnMacos() -> bool
+{
+    // Default: prefer CGL when it is current. Set to 0 to always prefer EGL when both appear current.
+    static const bool prefer = EnvFlagEnabled("GLRESOLVER_MACOS_PREFER_CGL", true);
+    return prefer;
+}
+
+#endif
+
+#ifdef _WIN32
+
+// While MSDN says wglGetProcAddress returns NULL on failure, some implementations
+// return special sentinel values for unsupported symbols.
+// See: https://wikis.khronos.org/opengl/Load_OpenGL_Functions
+auto IsInvalidWglProcAddressValue(std::uintptr_t raw) -> bool
+{
+    const std::uintptr_t maxv = std::numeric_limits<std::uintptr_t>::max();
+    // Common sentinels: 1,2,3,-1. Some stacks have been observed returning other
+    // near-max values; treat them as invalid conservatively.
+    return raw == 0u || raw == 1u || raw == 2u || raw == 3u || raw == maxv || raw == (maxv - 1u) || raw == (maxv - 2u);
+}
+
+#endif
 
 /**
  * @brief Checks whether a space-separated token list contains an exact token match.
@@ -198,31 +225,6 @@ auto GLResolver::Instance() -> GLResolver&
     return instance;
 }
 
-auto GLResolver::CheckGLRequirementsUnlocked() -> GLContextCheckResult
-{
-    GLContextCheck::Builder glCheck;
-
-#ifdef USE_GLES
-
-    glCheck
-        .WithApi(GLApi::OpenGLES)
-        .WithMinimumVersion(3, 0)
-        .WithRequireCoreProfile(false);
-
-#else
-
-    glCheck
-        .WithApi(GLApi::OpenGL)
-        .WithMinimumVersion(3, 3)
-        // Accept both core and compatibility contexts. A 3.3+ compatibility context is a valid
-        // configuration on many drivers/stacks, and profile filtering would reject it unnecessarily.
-        .WithRequireCoreProfile(false);
-
-#endif
-
-    return glCheck.Check();
-}
-
 auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
 {
 
@@ -243,19 +245,36 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
 
     m_initializing = true;
 
-    m_state.m_userResolver = resolver;
-    m_state.m_userData = userData;
+    ResolverState state{};
+
+    state.m_userResolver = resolver;
+    state.m_userData = userData;
+
+    lock.unlock();
 
     // Find source for gl functions.
 #ifndef __EMSCRIPTEN__
 
-    OpenNativeLibraries();
-    ResolveProviderFunctions();
+    OpenNativeLibraries(state);
+    ResolveProviderFunctions(state);
 
 #endif
 
     // Try to find a current gl context.
-    auto currentContext = ProbeCurrentContext();
+    auto currentContext = ProbeCurrentContext(state);
+        LOG_DEBUG(std::string("[GLResolver] CurrentContextProbe:") +
+                         " egl_current=\"" + (currentContext.eglCurrent ? "yes" : "no") + "\"" +
+                         " glx_current=\"" + (currentContext.glxCurrent ? "yes" : "no") + "\"" +
+                         " wgl_current=\"" + (currentContext.wglCurrent ? "yes" : "no") + "\"" +
+                         " cgl_current=\"" + (currentContext.cglCurrent ? "yes" : "no") + "\"" +
+                         " webgl_current=\"" + (currentContext.webglCurrent ? "yes" : "no") + "\"" +
+                         " egl_available=\"" + (currentContext.eglAvailable ? "yes" : "no") + "\"" +
+                         " glx_available=\"" + (currentContext.glxAvailable ? "yes" : "no") + "\"" +
+                         " wgl_available=\"" + (currentContext.wglAvailable ? "yes" : "no") + "\"" +
+                         " cgl_available=\"" + (currentContext.cglAvailable ? "yes" : "no") + "\"" +
+                         " webgl_available=\"" + (currentContext.webglAvailable ? "yes" : "no") + "\"");
+
+    lock.lock();
 
     // Precondition: caller must have a current context on this thread.
     {
@@ -263,43 +282,41 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
         if (!HasCurrentContext(currentContext, reason))
         {
             m_loaded = false;
-            m_state.m_backend = Backend::None;
 
             m_initializing = false;
             m_initCv.notify_all();
             lock.unlock();
-
             LOG_ERROR(std::string("[GLResolver] No current GL context present: ") + reason);
             return false;
         }
     }
 
     // Determine backend from current context.
-    DetectBackend(currentContext);
+    state.m_backend = DetectBackend(currentContext);
 
     // Emit a diagnostics line for troubleshooting.
     {
         std::string diag = std::string("[GLResolver] Resolver policy: backend=\"") +
-                           BackendToString(m_state.m_backend) + "\""
+                           BackendToString(state.m_backend) + "\""
 #ifndef __EMSCRIPTEN__
 
                            +
-                           " egl=\"" + m_eglLib.LoadedName() + "\"" +
-                           " gl=\"" + m_glLib.LoadedName() + "\"" +
-                           " glx=\"" + m_glxLib.LoadedName() + "\"" +
-                           " egl_get_proc=\"" + (m_state.m_eglGetProcAddress != nullptr ? "yes" : "no") + "\"" +
-                           " egl_all_proc=\"" + (m_state.m_eglGetAllProcAddresses ? "yes" : "no") + "\""
+                           " egl=\"" + state.m_eglLib.LoadedName() + "\"" +
+                           " gl=\"" + state.m_glLib.LoadedName() + "\"" +
+                           " glx=\"" + state.m_glxLib.LoadedName() + "\"" +
+                           " egl_get_proc=\"" + (state.m_eglGetProcAddress != nullptr ? "yes" : "no") + "\"" +
+                           " egl_all_proc=\"" + (state.m_eglGetAllProcAddresses ? "yes" : "no") + "\""
 
 #endif
             ;
 
 #ifdef _WIN32
 
-        diag += std::string(" wgl_get_proc=\"") + (m_state.m_wglGetProcAddress != nullptr ? "yes" : "no") + "\"";
+        diag += std::string(" wgl_get_proc=\"") + (state.m_wglGetProcAddress != nullptr ? "yes" : "no") + "\"";
 
 #elif !defined(__APPLE__) && !defined(__ANDROID__)
 
-        diag += std::string(" glx_get_proc=\"") + (m_state.m_glxGetProcAddress != nullptr ? "yes" : "no") + "\"";
+        diag += std::string(" glx_get_proc=\"") + (state.m_glxGetProcAddress != nullptr ? "yes" : "no") + "\"";
 
 #if PLATFORM_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK
 
@@ -313,63 +330,36 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
 
 #endif
 
-        diag += std::string(" user_resolver=\"") + (m_state.m_userResolver != nullptr ? "yes" : "no") + "\"";
+        diag += std::string(" user_resolver=\"") + (state.m_userResolver != nullptr ? "yes" : "no") + "\"";
 
         LOG_DEBUG(diag);
     }
 
     // The process needs to yield a backend. Unlikely to happen if a context was current.
-    if (m_state.m_backend == Backend::None)
+    if (state.m_backend == Backend::None)
     {
         m_loaded = false;
+
+        // Provide a concrete diagnostic to help debug "no backend" cases.
+        LOG_ERROR(std::string("[GLResolver] No current GL backend detected. ")
+                              + "egl_current=\"" + (currentContext.eglCurrent ? "yes" : "no") + "\"" 
+                              + " wgl_current=\"" + (currentContext.wglCurrent ? "yes" : "no") + "\"" 
+                              + " glx_current=\"" + (currentContext.glxCurrent ? "yes" : "no") + "\"" 
+                              + " cgl_current=\"" + (currentContext.cglCurrent ? "yes" : "no") + "\"" 
+                              + " webgl_current=\"" + (currentContext.webglCurrent ? "yes" : "no") + "\"");
+
         m_initializing = false;
         m_initCv.notify_all();
         lock.unlock();
-
-        LOG_ERROR(std::string("[GLResolver] Could not select a valid backend."));
+        LOG_ERROR("[GLResolver] Failed to detect an active GL backend for the current context.");
         return false;
     }
 
-    // Do not hold m_mutex while calling into GLAD.
-    lock.unlock();
-    const bool loaded = LoadGladUnlocked(m_state);
-    lock.lock();
-
-    if (!loaded)
-    {
-        m_loaded = false;
-    }
-    else
-    {
-        lock.unlock();
-        const auto glDetails = CheckGLRequirementsUnlocked();
-        lock.lock();
-
-        LOG_INFO(std::string("[GLResolver] GL Info: ") +
-                 GLContextCheck::FormatCompactLine(glDetails.info) +
-                 " backend=\"" + BackendToString(m_state.m_backend) + "\"" +
-                 " user_resolver=\"" + (m_state.m_userResolver != nullptr ? "yes" : "no") + "\"");
-
-        if (!glDetails.success)
-        {
-            LOG_ERROR(std::string("[GLResolver] GL requirements check failed: ") + glDetails.reason);
-        }
-
-        lock.unlock();
-
-        const bool ready = glDetails.success;
-        if (ready)
-        {
-            SOIL_GL_SetResolver(&GLResolver::GladResolverThunk);
-            SOIL_GL_Init();
-        }
-
-        lock.lock();
-        m_loaded = ready;
-    }
-
+    m_state = std::make_shared<const ResolverState>(std::move(state));
     m_initializing = false;
+    m_loaded = true;
     m_initCv.notify_all();
+
     lock.unlock();
 
     return m_loaded;
@@ -384,50 +374,50 @@ auto GLResolver::IsLoaded() const -> bool
 auto GLResolver::CurrentBackend() const -> Backend
 {
     const std::lock_guard<std::mutex> lock(m_mutex);
-    return m_state.m_backend;
+    return m_state == nullptr ? Backend::None : m_state->m_backend;
 }
 
-bool GLResolver::VerifyBackendIsCurrent(const ResolverState& state, const CurrentContextProbe& currentContext) const
+auto GLResolver::HasUserResolver() const -> bool
 {
-    switch (state.m_backend)
+    const std::lock_guard<std::mutex> lock(m_mutex);
+    return m_state == nullptr ? false : m_state->m_userResolver != nullptr;
+}
+
+auto GLResolver::VerifyBackendIsCurrent(Backend backend, const CurrentContextProbe& currentContext) const -> bool
+{
+    switch (backend)
     {
         case Backend::CGL:
             if (!currentContext.cglCurrent)
             {
-                LOG_ERROR(std::string("[GLResolver] CGL context not available."));
                 return false;
             }
             break;
         case Backend::EGL:
             if (!currentContext.eglCurrent)
             {
-                LOG_ERROR(std::string("[GLResolver] EGL context not available."));
                 return false;
             }
             break;
         case Backend::GLX:
             if (!currentContext.glxCurrent)
             {
-                LOG_ERROR(std::string("[GLResolver] GLX context not available."));
                 return false;
             }
             break;
         case Backend::WGL:
             if (!currentContext.wglCurrent)
             {
-                LOG_ERROR(std::string("[GLResolver] WGL context not available."));
                 return false;
             }
             break;
         case Backend::WebGL:
             if (!currentContext.webglCurrent)
             {
-                LOG_ERROR(std::string("[GLResolver] WebGL context not available."));
                 return false;
             }
             break;
         default:
-            LOG_ERROR(std::string("[GLResolver] Initialization did not choose a valid backend."));
             return false;
     }
     return true;
@@ -441,29 +431,43 @@ auto GLResolver::GetProcAddress(const char* name) const -> void*
     }
 
     // Avoid holding m_mutex while calling user callbacks or driver/loader code.
-    // Only hold m_mutex while reading internal state and probing the current context.
+    // Only hold m_mutex while reading internal state and coordinating initialization.
     std::unique_lock<std::mutex> lock(m_mutex);
 
-    if (!m_loaded && !m_initializing)
+    if (m_initializing)
+    {
+        LOG_DEBUG(std::string("[GLResolver] GetProcAddress called while initialization is in-flight; waiting."));
+        m_initCv.wait(lock, [this]() { return !m_initializing; });
+    }
+
+    if (!m_loaded)
     {
         LOG_ERROR(std::string("[GLResolver] GetProcAddress called without initialization."));
         return nullptr;
     }
 
     // Local state copy to use once the lock is released.
-    const auto state = m_state;
-
-    // Gate to detected backend.
-    const auto currentContext = ProbeCurrentContext();
+    auto state = m_state;
 
     lock.unlock();
 
-    if (!VerifyBackendIsCurrent(state, currentContext))
+    // Gate to detected backend.
+    const auto currentContext = ProbeCurrentContext(*state);
+    const bool backendOk = VerifyBackendIsCurrent(state->m_backend, currentContext);
+    if (!backendOk)
     {
-        return nullptr;
+        if (StrictContextGateEnabled())
+        {
+            LOG_ERROR(std::string("[GLResolver] Context for detected backend is not available (backend=") +
+                      BackendToString(state->m_backend) + ")");
+            return nullptr;
+        }
+
+        LOG_DEBUG(std::string("[GLResolver] Strict context gate disabled; continuing despite backend mismatch (backend=") +
+                  BackendToString(state->m_backend) + ")");
     }
 
-    void* resolved = ResolveUnlocked(name, state);
+    void* resolved = ResolveProcAddress(*state, name);
 
     if (resolved != nullptr)
     {
@@ -481,25 +485,25 @@ auto GLResolver::GetProcAddress(const char* name) const -> void*
     }
 
     // Direct library symbol lookup.
-    if (m_eglLib.IsOpen())
+    if (state->m_eglLib.IsOpen())
     {
-        void* ptr = m_eglLib.GetSymbol(name);
+        void* ptr = state->m_eglLib.GetSymbol(name);
         if (ptr != nullptr)
         {
             return ptr;
         }
     }
-    if (m_glLib.IsOpen())
+    if (state->m_glLib.IsOpen())
     {
-        void* ptr = m_glLib.GetSymbol(name);
+        void* ptr = state->m_glLib.GetSymbol(name);
         if (ptr != nullptr)
         {
             return ptr;
         }
     }
-    if (m_glxLib.IsOpen())
+    if (state->m_glxLib.IsOpen())
     {
-        void* ptr = m_glxLib.GetSymbol(name);
+        void* ptr = state->m_glxLib.GetSymbol(name);
         if (ptr != nullptr)
         {
             return ptr;
@@ -513,11 +517,11 @@ auto GLResolver::GetProcAddress(const char* name) const -> void*
     // Optional GLX fallback for non-extension names:
     // Some stacks require glXGetProcAddress* even for core entry points, but some
     // implementations return non-null for unknown symbols. This is OFF by default.
-    if ((state.m_backend == Backend::GLX || state.m_backend == Backend::None) &&
-        state.m_glxGetProcAddress != nullptr &&
+    if ((state->m_backend == Backend::GLX || state->m_backend == Backend::None) &&
+        state->m_glxGetProcAddress != nullptr &&
         !ShouldUseGlxGetProcAddressForName(name))
     {
-        auto proc = state.m_glxGetProcAddress(reinterpret_cast<const unsigned char*>(name));
+        auto proc = state->m_glxGetProcAddress(reinterpret_cast<const unsigned char*>(name));
         if (proc != nullptr)
         {
             return FunctionToSymbol(proc);
@@ -532,12 +536,12 @@ auto GLResolver::GetProcAddress(const char* name) const -> void*
     // eglGetProcAddress despite not advertising EGL_KHR_*get_all_proc_addresses. The spec
     // does not require this behavior, so we keep a strict policy first and only try this
     // after all export/global lookups fail.
-    if ((state.m_backend == Backend::EGL || state.m_backend == Backend::None) &&
-        state.m_eglGetProcAddress != nullptr &&
-        !state.m_eglGetAllProcAddresses &&
+    if ((state->m_backend == Backend::EGL || state->m_backend == Backend::None) &&
+        state->m_eglGetProcAddress != nullptr &&
+        !state->m_eglGetAllProcAddresses &&
         !ShouldUseEglGetProcAddressForName(name))
     {
-        const EglProc proc = state.m_eglGetProcAddress(name);
+        const EglProc proc = state->m_eglGetProcAddress(name);
         if (proc != nullptr)
         {
             return FunctionToSymbol(proc);
@@ -549,9 +553,9 @@ auto GLResolver::GetProcAddress(const char* name) const -> void*
     return nullptr;
 }
 
-void GLResolver::OpenNativeLibraries()
+void GLResolver::OpenNativeLibraries(ResolverState& state)
 {
-    // Best-effort: macOS or minimal EGL setups may fail to open.
+    // macOS or minimal EGL setups may fail to open.
     std::string reason;
 
 #ifdef _WIN32
@@ -565,15 +569,25 @@ void GLResolver::OpenNativeLibraries()
 
     // macOS native OpenGL uses CGL (OpenGL.framework). ANGLE (and other portability layers).
     // commonly provide EGL/GLES dylibs in the application bundle / @rpath.
-    static constexpr std::array<const char*, 4> kEglNames = {"libEGL.dylib", "libEGL.1.dylib", "EGL", nullptr};
+    static constexpr std::array<const char*, 6> kEglNames = {
+        "@rpath/libEGL.dylib",
+        "@rpath/libEGL.1.dylib",
+        "libEGL.dylib",
+        "libEGL.1.dylib",
+        "EGL",
+        nullptr};
 
     static constexpr std::array<const char*, 2> kGlCglNames = {
         "/System/Library/Frameworks/OpenGL.framework/OpenGL",
         nullptr};
 
-    static constexpr std::array<const char*, 3> kGlGlesNames = {
+    static constexpr std::array<const char*, 7> kGlGlesNames = {
+        "@rpath/libGLESv3.dylib",
+        "@rpath/libGLESv2.dylib",
+        "@rpath/libGLESv2_with_capture.dylib",
         "libGLESv3.dylib",
         "libGLESv2.dylib",
+        "libGLESv2_with_capture.dylib",
         nullptr};
 
 #elif defined(__ANDROID__)
@@ -614,14 +628,15 @@ void GLResolver::OpenNativeLibraries()
 #endif
 
     // Linux / GLVND note:
-    // Some environments (especially minimal/container) may not ship libGL.so.1 but do ship GLVND libs.
-    // Keep legacy libGL first for backwards compatibility, but fall back to GLVND-facing libs if needed.
+    // Many modern distributions use GLVND, which splits OpenGL entry points (libOpenGL) from
+    // window-system glue such as GLX (libGLX). Prefer GLVND-facing libs first, but keep legacy
+    // libGL names in the candidate list for compatibility with older or non-GLVND stacks.
     static constexpr std::array<const char*, 3> kGlxNames = {
         "libGLX.so.1", // GLVND GLX dispatcher (glXGetProcAddress*)
         "libGLX.so.0", // older GLVND soname
         nullptr};
     reason = "";
-    const bool glxOpened = m_glxLib.Open(kGlxNames.data(), reason);
+    const bool glxOpened = state.m_glxLib.Open(kGlxNames.data(), reason);
     if (!glxOpened)
     {
         LOG_DEBUG(std::string("[GLResolver] Failed to open GLX library: ") + reason);
@@ -630,7 +645,7 @@ void GLResolver::OpenNativeLibraries()
 #endif
 
     reason = "";
-    const bool eglOpened = m_eglLib.Open(kEglNames.data(), reason);
+    const bool eglOpened = state.m_eglLib.Open(kEglNames.data(), reason);
     if (!eglOpened)
     {
         LOG_DEBUG(std::string("[GLResolver] Failed to open EGL library: ") + reason);
@@ -651,7 +666,7 @@ void GLResolver::OpenNativeLibraries()
 #endif
 
     reason = "";
-    const bool glOpened = m_glLib.Open(glNames, reason);
+    const bool glOpened = state.m_glLib.Open(glNames, reason);
 
 #elif defined(__APPLE__)
 
@@ -668,12 +683,12 @@ void GLResolver::OpenNativeLibraries()
 #endif
 
     reason = "";
-    const bool glOpened = m_glLib.Open(glNames, reason);
+    const bool glOpened = state.m_glLib.Open(glNames, reason);
 
 #else
 
     reason = "";
-    const bool glOpened = m_glLib.Open(kGlNames.data(), reason);
+    const bool glOpened = state.m_glLib.Open(kGlNames.data(), reason);
 
 #endif
 
@@ -683,7 +698,7 @@ void GLResolver::OpenNativeLibraries()
     }
 }
 
-void GLResolver::ResolveProviderFunctions()
+void GLResolver::ResolveProviderFunctions(ResolverState& state)
 {
     // EGL
     {
@@ -692,9 +707,9 @@ void GLResolver::ResolveProviderFunctions()
         // core functions. This resolver therefore also falls back to global and direct library
         // exports in GetProcAddress().
         void* sym = nullptr;
-        if (m_eglLib.IsOpen())
+        if (state.m_eglLib.IsOpen())
         {
-            sym = m_eglLib.GetSymbol("eglGetProcAddress");
+            sym = state.m_eglLib.GetSymbol("eglGetProcAddress");
         }
         if (sym == nullptr)
         {
@@ -702,13 +717,13 @@ void GLResolver::ResolveProviderFunctions()
         }
         if (sym != nullptr)
         {
-            m_state.m_eglGetProcAddress = SymbolToFunction<EglGetProcAddressFn>(sym);
-            if (m_state.m_eglGetProcAddress == nullptr)
+            state.m_eglGetProcAddress = SymbolToFunction<EglGetProcAddressFn>(sym);
+            if (state.m_eglGetProcAddress == nullptr)
             {
                 LOG_DEBUG("[GLResolver] eglGetProcAddress found but could not be converted to a function pointer");
             }
         }
-        else if (m_eglLib.IsOpen())
+        else if (state.m_eglLib.IsOpen())
         {
             LOG_DEBUG("[GLResolver] eglGetProcAddress not found (EGL loaded but missing symbol)");
         }
@@ -716,15 +731,15 @@ void GLResolver::ResolveProviderFunctions()
     // eglGetCurrentContext (used for backend probing)
     {
         void* sym = nullptr;
-        if (m_eglLib.IsOpen())
+        if (state.m_eglLib.IsOpen())
         {
-            sym = m_eglLib.GetSymbol("eglGetCurrentContext");
+            sym = state.m_eglLib.GetSymbol("eglGetCurrentContext");
         }
         if (sym == nullptr)
         {
             sym = DynamicLibrary::FindGlobalSymbol("eglGetCurrentContext");
         }
-        m_state.m_eglGetCurrentContext = SymbolToFunction<EglGetCurrentContextFn>(sym);
+        state.m_eglGetCurrentContext = SymbolToFunction<EglGetCurrentContextFn>(sym);
     }
 
     // Detect EGL_KHR_get_all_proc_addresses / EGL_KHR_client_get_all_proc_addresses.
@@ -734,7 +749,7 @@ void GLResolver::ResolveProviderFunctions()
     // - Display extension: query via eglQueryString(current_display, EGL_EXTENSIONS)
     // See: Khronos registry extension text.
     {
-        m_state.m_eglGetAllProcAddresses = false;
+        state.m_eglGetAllProcAddresses = false;
 
         // Avoid depending on platform EGL headers here; use opaque handles and well-known constants.
         // Note: on 32-bit Windows, EGL entry points use stdcall (EGLAPIENTRY).
@@ -749,9 +764,9 @@ void GLResolver::ResolveProviderFunctions()
         EglDisplay kEglNoDisplay = nullptr;    // EGL_NO_DISPLAY
 
         void* querySym = nullptr;
-        if (m_eglLib.IsOpen())
+        if (state.m_eglLib.IsOpen())
         {
-            querySym = m_eglLib.GetSymbol("eglQueryString");
+            querySym = state.m_eglLib.GetSymbol("eglQueryString");
         }
         if (querySym == nullptr)
         {
@@ -769,17 +784,17 @@ void GLResolver::ResolveProviderFunctions()
                 // may return addresses for all client API functions (including core entry points).
                 if (HasSpaceSeparatedToken(clientExt, "EGL_KHR_client_get_all_proc_addresses"))
                 {
-                    m_state.m_eglGetAllProcAddresses = true;
+                    state.m_eglGetAllProcAddresses = true;
                 }
             }
             else
             {
                 // If EGL_EXT_client_extensions is not supported, this call is expected to fail.
-                // Best-effort: drain eglGetError() for deterministic debug logs.
+                // drain eglGetError() for deterministic debug logs.
                 void* errSym = nullptr;
-                if (m_eglLib.IsOpen())
+                if (state.m_eglLib.IsOpen())
                 {
-                    errSym = m_eglLib.GetSymbol("eglGetError");
+                    errSym = state.m_eglLib.GetSymbol("eglGetError");
                 }
                 if (errSym == nullptr)
                 {
@@ -798,11 +813,11 @@ void GLResolver::ResolveProviderFunctions()
                 }
             }
 
-            // Display extension: requires a display. Best-effort: use eglGetCurrentDisplay if available.
+            // Display extension: requires a display. use eglGetCurrentDisplay if available.
             void* dpySym = nullptr;
-            if (m_eglLib.IsOpen())
+            if (state.m_eglLib.IsOpen())
             {
-                dpySym = m_eglLib.GetSymbol("eglGetCurrentDisplay");
+                dpySym = state.m_eglLib.GetSymbol("eglGetCurrentDisplay");
             }
             if (dpySym == nullptr)
             {
@@ -820,23 +835,23 @@ void GLResolver::ResolveProviderFunctions()
                     {
                         if (HasSpaceSeparatedToken(displayExt, "EGL_KHR_get_all_proc_addresses"))
                         {
-                            m_state.m_eglGetAllProcAddresses = true;
+                            state.m_eglGetAllProcAddresses = true;
                         }
                     }
                 }
             }
         }
 
-        LOG_DEBUG(std::string("[GLResolver] EGL get_all_proc_addresses=") + (m_state.m_eglGetAllProcAddresses ? "yes" : "no"));
+        LOG_DEBUG(std::string("[GLResolver] EGL get_all_proc_addresses=") + (state.m_eglGetAllProcAddresses ? "yes" : "no"));
     }
 
 #ifdef _WIN32
     // WGL
     {
         void* sym = nullptr;
-        if (m_glLib.IsOpen())
+        if (state.m_glLib.IsOpen())
         {
-            sym = m_glLib.GetSymbol("wglGetProcAddress");
+            sym = state.m_glLib.GetSymbol("wglGetProcAddress");
         }
         if (sym == nullptr)
         {
@@ -844,22 +859,22 @@ void GLResolver::ResolveProviderFunctions()
         }
         if (sym != nullptr)
         {
-            m_state.m_wglGetProcAddress = SymbolToFunction<WglGetProcAddressFn>(sym);
-            if (m_state.m_wglGetProcAddress == nullptr)
+            state.m_wglGetProcAddress = SymbolToFunction<WglGetProcAddressFn>(sym);
+            if (state.m_wglGetProcAddress == nullptr)
             {
                 LOG_DEBUG("[GLResolver] wglGetProcAddress found but could not be converted to a function pointer");
             }
         }
-        else if (m_glLib.IsOpen())
+        else if (state.m_glLib.IsOpen())
         {
             LOG_DEBUG("[GLResolver] wglGetProcAddress not found (GL library loaded but missing symbol)");
         }
     }
     {
         void* sym = nullptr;
-        if (m_glLib.IsOpen())
+        if (state.m_glLib.IsOpen())
         {
-            sym = m_glLib.GetSymbol("wglGetCurrentContext");
+            sym = state.m_glLib.GetSymbol("wglGetCurrentContext");
         }
         if (sym == nullptr)
         {
@@ -867,8 +882,8 @@ void GLResolver::ResolveProviderFunctions()
         }
         if (sym != nullptr)
         {
-            m_state.m_wglGetCurrentContext = SymbolToFunction<WglGetCurrentContextFn>(sym);
-            if (m_state.m_wglGetCurrentContext == nullptr)
+            state.m_wglGetCurrentContext = SymbolToFunction<WglGetCurrentContextFn>(sym);
+            if (state.m_wglGetCurrentContext == nullptr)
             {
                 LOG_DEBUG("[GLResolver] m_wglGetCurrentContextAddress found but could not be converted to a function pointer");
             }
@@ -878,36 +893,36 @@ void GLResolver::ResolveProviderFunctions()
     using CglGetCurrentContextFn = void* (*) ();
 
     void* sym = nullptr;
-    if (m_glLib.IsOpen())
+    if (state.m_glLib.IsOpen())
     {
-        sym = m_glLib.GetSymbol("CGLGetCurrentContext");
+        sym = state.m_glLib.GetSymbol("CGLGetCurrentContext");
     }
     if (sym == nullptr)
     {
         sym = DynamicLibrary::FindGlobalSymbol("CGLGetCurrentContext");
     }
 
-    m_state.m_cglGetCurrentContext = SymbolToFunction<CglGetCurrentContextFn>(sym);
+    state.m_cglGetCurrentContext = SymbolToFunction<CglGetCurrentContextFn>(sym);
 #elif !defined(__ANDROID__)
     // GLX
     {
         void* sym = nullptr;
 
         // Prefer explicit library handles when we have them.
-        if (m_glxLib.IsOpen())
+        if (state.m_glxLib.IsOpen())
         {
-            sym = m_glxLib.GetSymbol("glXGetProcAddressARB");
+            sym = state.m_glxLib.GetSymbol("glXGetProcAddressARB");
             if (sym == nullptr)
             {
-                sym = m_glxLib.GetSymbol("glXGetProcAddress");
+                sym = state.m_glxLib.GetSymbol("glXGetProcAddress");
             }
         }
-        if (sym == nullptr && m_glLib.IsOpen())
+        if (sym == nullptr && state.m_glLib.IsOpen())
         {
-            sym = m_glLib.GetSymbol("glXGetProcAddressARB");
+            sym = state.m_glLib.GetSymbol("glXGetProcAddressARB");
             if (sym == nullptr)
             {
-                sym = m_glLib.GetSymbol("glXGetProcAddress");
+                sym = state.m_glLib.GetSymbol("glXGetProcAddress");
             }
         }
 
@@ -923,26 +938,26 @@ void GLResolver::ResolveProviderFunctions()
 
         if (sym != nullptr)
         {
-            m_state.m_glxGetProcAddress = SymbolToFunction<GlxGetProcAddressFn>(sym);
-            if (m_state.m_glxGetProcAddress == nullptr)
+            state.m_glxGetProcAddress = SymbolToFunction<GlxGetProcAddressFn>(sym);
+            if (state.m_glxGetProcAddress == nullptr)
             {
                 LOG_DEBUG("[GLResolver] glXGetProcAddress* found but could not be converted to a function pointer");
             }
         }
-        else if (m_glxLib.IsOpen() || m_glLib.IsOpen())
+        else if (state.m_glxLib.IsOpen() || state.m_glLib.IsOpen())
         {
             LOG_DEBUG("[GLResolver] glXGetProcAddress* not found (GLX/GL loaded but missing symbol)");
         }
     }
     {
         void* sym = nullptr;
-        if (m_glxLib.IsOpen())
+        if (state.m_glxLib.IsOpen())
         {
-            sym = m_glxLib.GetSymbol("glXGetCurrentContext");
+            sym = state.m_glxLib.GetSymbol("glXGetCurrentContext");
         }
-        if (sym == nullptr && m_glLib.IsOpen())
+        if (sym == nullptr && state.m_glLib.IsOpen())
         {
-            sym = m_glLib.GetSymbol("glXGetCurrentContext");
+            sym = state.m_glLib.GetSymbol("glXGetCurrentContext");
         }
         if (sym == nullptr)
         {
@@ -950,24 +965,24 @@ void GLResolver::ResolveProviderFunctions()
             sym = DynamicLibrary::FindGlobalSymbol("glXGetCurrentContext");
         }
 
-        m_state.m_glxGetCurrentContext = SymbolToFunction<GlxGetCurrentContextFn>(sym);
+        state.m_glxGetCurrentContext = SymbolToFunction<GlxGetCurrentContextFn>(sym);
     }
 #endif
 
     LOG_DEBUG(std::string("[GLResolver] EGL  handle=") +
-              std::to_string(reinterpret_cast<std::uintptr_t>(m_eglLib.Handle())) +
-              " lib=\"" + m_eglLib.LoadedName() + "\"");
+              std::to_string(reinterpret_cast<std::uintptr_t>(state.m_eglLib.Handle())) +
+              " lib=\"" + state.m_eglLib.LoadedName() + "\"");
 
     LOG_DEBUG(std::string("[GLResolver] GL   handle=") +
-              std::to_string(reinterpret_cast<std::uintptr_t>(m_glLib.Handle())) +
-              " lib=\"" + m_glLib.LoadedName() + "\"");
+              std::to_string(reinterpret_cast<std::uintptr_t>(state.m_glLib.Handle())) +
+              " lib=\"" + state.m_glLib.LoadedName() + "\"");
 
     LOG_DEBUG(std::string("[GLResolver] GLX  handle=") +
-              std::to_string(reinterpret_cast<std::uintptr_t>(m_glxLib.Handle())) +
-              " lib=\"" + m_glxLib.LoadedName() + "\"");
+              std::to_string(reinterpret_cast<std::uintptr_t>(state.m_glxLib.Handle())) +
+              " lib=\"" + state.m_glxLib.LoadedName() + "\"");
 }
 
-auto GLResolver::ProbeCurrentContext() const -> CurrentContextProbe
+auto GLResolver::ProbeCurrentContext(const ResolverState& state) -> CurrentContextProbe
 {
     CurrentContextProbe result;
 
@@ -984,45 +999,45 @@ auto GLResolver::ProbeCurrentContext() const -> CurrentContextProbe
 #else
 
     // EGL (including ANGLE, GLES, and desktop EGL)
-    result.eglLibOpened = m_eglLib.IsOpen();
+    result.eglLibOpened = state.m_eglLib.IsOpen();
 
-    if (m_state.m_eglGetCurrentContext != nullptr)
+    if (state.m_eglGetCurrentContext != nullptr)
     {
         result.eglAvailable = true;
-        result.eglCurrent = m_state.m_eglGetCurrentContext() != nullptr;
+        result.eglCurrent = state.m_eglGetCurrentContext() != nullptr;
     }
 
 #ifdef _WIN32
 
     // WGL
-    result.wglLibOpened = m_glLib.IsOpen();
+    result.wglLibOpened = state.m_glLib.IsOpen();
 
-    if (m_state.m_wglGetCurrentContext != nullptr)
+    if (state.m_wglGetCurrentContext != nullptr)
     {
         result.wglAvailable = true;
-        result.wglCurrent = m_state.m_wglGetCurrentContext() != nullptr;
+        result.wglCurrent = state.m_wglGetCurrentContext() != nullptr;
     }
 
 #elif defined(__APPLE__)
 
     // CGL (macOS native OpenGL)
-    result.cglLibOpened = m_glLib.IsOpen();
+    result.cglLibOpened = state.m_glLib.IsOpen();
 
-    if (m_state.m_cglGetCurrentContext != nullptr)
+    if (state.m_cglGetCurrentContext != nullptr)
     {
         result.cglAvailable = true;
-        result.cglCurrent = m_state.m_cglGetCurrentContext() != nullptr;
+        result.cglCurrent = state.m_cglGetCurrentContext() != nullptr;
     }
 
 #elif !defined(__ANDROID__)
 
     // GLX (Linux/Unix via libGLX/libGL or GLVND dispatch)
-    result.glxLibOpened = m_glxLib.IsOpen() || m_glLib.IsOpen();
+    result.glxLibOpened = state.m_glxLib.IsOpen() || state.m_glLib.IsOpen();
 
-    if (m_state.m_glxGetCurrentContext != nullptr)
+    if (state.m_glxGetCurrentContext != nullptr)
     {
         result.glxAvailable = true;
-        result.glxCurrent = m_state.m_glxGetCurrentContext() != nullptr;
+        result.glxCurrent = state.m_glxGetCurrentContext() != nullptr;
     }
 
 #endif
@@ -1129,111 +1144,71 @@ auto GLResolver::HasCurrentContext(const CurrentContextProbe& probe, std::string
 #endif // #ifdef __EMSCRIPTEN__
 }
 
-auto GLResolver::DetectBackend(const CurrentContextProbe& probe) -> void
+auto GLResolver::DetectBackend(const CurrentContextProbe& probe) -> Backend
 {
 
 #ifdef __EMSCRIPTEN__
 
     if (probe.webglCurrent)
     {
-        m_state.m_backend = Backend::WebGL;
+        return Backend::WebGL;
     }
-    return;
+    return Backend::None;
 
 #else
 
+#if defined(__APPLE__)
+
+    // macOS can host both native CGL and EGL (e.g. ANGLE) depending on how the context was created.
+    // Default policy prefers CGL when it is current, unless overridden via GLRESOLVER_MACOS_PREFER_CGL=0.
+    if (probe.cglCurrent && PreferCglOnMacos())
+    {
+        return Backend::CGL;
+    }
+
+#endif
+
+    // Default policy prefers EGL if available.
     if (probe.eglCurrent)
     {
-        m_state.m_backend = Backend::EGL;
-        return;
+        return Backend::EGL;
     }
 
 #ifdef _WIN32
 
     if (probe.wglCurrent)
     {
-        m_state.m_backend = Backend::WGL;
-        return;
+        return Backend::WGL;
     }
 
 #elif defined(__APPLE__)
 
     if (probe.cglCurrent)
     {
-        m_state.m_backend = Backend::CGL;
-        return;
+        return Backend::CGL;
     }
 
 #elif !defined(__ANDROID__)
 
     if (probe.glxCurrent)
     {
-        m_state.m_backend = Backend::GLX;
-        return;
+        return Backend::GLX;
     }
 
 #endif
 
-    m_state.m_backend = Backend::None;
+    return Backend::None;
 
 #endif
 }
 
 
-auto GLResolver::GladResolverThunk(const char* name) -> void*
+auto GLResolver::GetProcAddressThunk(const char* name) -> void*
 {
     return Instance().GetProcAddress(name);
 }
 
-namespace {
-
-/**
- * Resolves a GL function by name using GladResolverThunk.
- * Adapt external void* handle to GLAD type
- *
- * @param name GL function name.
- *
- * @return Function pointer as GLADapiproc.
- */
-auto GladBridgeResolverThunk(const char* name) -> GLADapiproc
-{
-    return SymbolToFunction<GLADapiproc>(GLResolver::GladResolverThunk(name));
-}
-
-} // namespace
-
-auto GLResolver::LoadGladUnlocked(const ResolverState& state) -> bool
-{
-
-#ifndef USE_GLES
-
-    const int result = gladLoadGL(&GladBridgeResolverThunk);
-    if (result != 0)
-    {
-        LOG_DEBUG("[GLResolver] gladLoadGL() succeeded");
-        return true;
-    }
-    LOG_ERROR(std::string("[GLResolver] gladLoadGL() failed (backend=") +
-              BackendToString(state.m_backend) + ")");
-    return false;
-
-#else
-
-    const int result = gladLoadGLES2(&GladBridgeResolverThunk);
-    if (result != 0)
-    {
-        LOG_DEBUG("[GLResolver] gladLoadGLES2() succeeded");
-        return true;
-    }
-    LOG_ERROR(std::string("[GLResolver] gladLoadGLES2() failed (backend=") +
-              BackendToString(state.m_backend) + ")");
-
-    return false;
-
-#endif
-}
-
-auto GLResolver::ResolveUnlocked(const char* name, const ResolverState& state) -> void*
+auto GLResolver::ResolveProcAddress(const ResolverState& state, const char* name) -> void*
 {
     // 1) User resolver
     if (state.m_userResolver != nullptr)
@@ -1338,12 +1313,12 @@ auto GLResolver::ResolveUnlocked(const char* name, const ResolverState& state) -
         PROC proc = state.m_wglGetProcAddress(name);
         if (proc != nullptr)
         {
-            // wglGetProcAddress can return special sentinel values (1,2,3,-1) for core symbols.
+            // wglGetProcAddress can return special sentinel values (1,2,3,-1) for unsupported symbols.
             // Treat those as invalid and allow fallback to GetProcAddress/dlsym paths.
             const std::uintptr_t raw = FunctionToInteger(proc);
             // FunctionToInteger returns 0 on non-representable conversions (e.g. function pointers wider than void*).
             // Treat that as invalid and allow fallback to exported symbols.
-            if (raw != 0u && raw != 1u && raw != 2u && raw != 3u && raw != std::numeric_limits<std::uintptr_t>::max())
+            if (!IsInvalidWglProcAddressValue(raw))
             {
                 // Prefer exports from opengl32.dll for core OpenGL 1.1 entry points.
                 // In the wild, wglGetProcAddress may return a non-null pointer for some core symbols

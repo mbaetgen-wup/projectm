@@ -1,5 +1,9 @@
 
-#include "PlatformLoader.hpp"
+#include "DynamicLibrary.hpp"
+
+#include "Logging.hpp"
+
+#include <cstdio>
 
 #ifndef __EMSCRIPTEN__
 
@@ -31,7 +35,7 @@
 #endif
 
 // -------------------------------------------------------------------------
-// Optional legacy DLL search fallback
+// Legacy DLL search fallback
 // -------------------------------------------------------------------------
 //
 // If the OS loader does not support LOAD_LIBRARY_SEARCH_* flags (ERROR_INVALID_PARAMETER),
@@ -42,10 +46,10 @@
 // (which can consult legacy search paths such as the process current working directory).
 // This is disabled by default for security hardening.
 //
-// Define PLATFORM_ALLOW_UNSAFE_DLL_SEARCH=1 to re-enable the legacy fallback.
-#ifndef PLATFORM_ALLOW_UNSAFE_DLL_SEARCH
+// Define GLRESOLVER_ALLOW_UNSAFE_DLL_SEARCH=1 to re-enable the legacy fallback.
+#ifndef GLRESOLVER_ALLOW_UNSAFE_DLL_SEARCH
 
-#define PLATFORM_ALLOW_UNSAFE_DLL_SEARCH 0
+#define GLRESOLVER_ALLOW_UNSAFE_DLL_SEARCH 0
 
 #endif
 
@@ -89,9 +93,49 @@ auto TrimTrailingWhitespace(std::string& str) -> void
 
 } // namespace
 
+auto EnvFlagEnabled(const char* name, bool defaultValue) -> bool
+{
+    if (name == nullptr)
+    {
+        return defaultValue;
+    }
+    const char* v = std::getenv(name);
+    if (v == nullptr || v[0] == '\0')
+    {
+        return defaultValue;
+    }
+
+    // Lowercase first char is enough for common values.
+    const char c0 = (v[0] >= 'A' && v[0] <= 'Z') ? static_cast<char>(v[0] - 'A' + 'a') : v[0];
+    if (c0 == '1' || c0 == 'y' || c0 == 't')
+    {
+        return true;
+    }
+    if (c0 == '0' || c0 == 'n' || c0 == 'f')
+    {
+        return false;
+    }
+
+    // Accept "on"/"off".
+    if ((c0 == 'o') && (v[1] != '\0'))
+    {
+        const char c1 = (v[1] >= 'A' && v[1] <= 'Z') ? static_cast<char>(v[1] - 'A' + 'a') : v[1];
+        if (c1 == 'n')
+        {
+            return true;
+        }
+        if (c1 == 'f')
+        {
+            return false;
+        }
+    }
+
+    return defaultValue;
+}
+
 #ifndef __EMSCRIPTEN__
 
-    DynamicLibrary::~DynamicLibrary()
+DynamicLibrary::~DynamicLibrary()
     {
         if (m_closeOnDestruct)
         {
@@ -142,6 +186,8 @@ auto TrimTrailingWhitespace(std::string& str) -> void
                 continue;
             }
 
+            LOG_DEBUG(std::string("[DynamicLibrary] open attempt: ") + name);
+
 #ifdef _WIN32
 
             // DLL loading policy:
@@ -149,7 +195,7 @@ auto TrimTrailingWhitespace(std::string& str) -> void
             //  - If the OS loader doesn't support the flags (ERROR_INVALID_PARAMETER), fall back to:
             //      * application directory (explicit full path based on the running module)
             //      * System32 (for known system DLLs like opengl32.dll)
-            //      * optionally, legacy LoadLibraryA(name) (disabled by default; see PLATFORM_ALLOW_UNSAFE_DLL_SEARCH).
+            //      * optionally, legacy LoadLibraryA(name) (disabled by default; see GLRESOLVER_ALLOW_UNSAFE_DLL_SEARCH).
             //
             // NOTE: We intentionally do not call SetDefaultDllDirectories() here. It changes
             // the process-wide DLL search behavior and can surprise a host application.
@@ -202,7 +248,7 @@ auto TrimTrailingWhitespace(std::string& str) -> void
                 return ::LoadLibraryA(dllName);
             };
 
-            // Best-effort legacy fallback when LOAD_LIBRARY_SEARCH_* flags are unavailable.
+            // legacy fallback when LOAD_LIBRARY_SEARCH_* flags are unavailable.
             // Prefer LOAD_WITH_ALTERED_SEARCH_PATH for absolute paths so dependent DLLs are
             // resolved relative to the loaded module directory.
             auto tryLoadExplicitPathFallback = [&](const char* dllPath) -> HMODULE {
@@ -285,7 +331,7 @@ auto TrimTrailingWhitespace(std::string& str) -> void
 
                 if (handle == nullptr && ::GetLastError() == ERROR_INVALID_PARAMETER)
                 {
-                    // Flags unsupported: best-effort manual safe search.
+                    // Flags unsupported: manual safe search.
                     // 1) Application directory
                     if (handle == nullptr && !appFull.empty())
                     {
@@ -307,7 +353,7 @@ auto TrimTrailingWhitespace(std::string& str) -> void
                     // NOTE: LoadLibrary(name) without LOAD_LIBRARY_SEARCH_* flags can consult legacy
                     // search paths (including the current working directory) depending on process
                     // configuration. See Microsoft guidance on DLL search order hardening.
-                    if (handle == nullptr && PLATFORM_ALLOW_UNSAFE_DLL_SEARCH != 0)
+                    if (handle == nullptr && GLRESOLVER_ALLOW_UNSAFE_DLL_SEARCH != 0)
                     {
                         handle = tryLoad(name);
                     }
@@ -326,11 +372,43 @@ auto TrimTrailingWhitespace(std::string& str) -> void
             ::dlerror(); // clear any prior error
             m_handle = ::dlopen(name, RTLD_NOW | RTLD_LOCAL);
 
+#if defined(__APPLE__)
+            // Allow callers to specify an explicit search directory for bundled dylibs
+            // (e.g., ANGLE's libEGL.dylib / libGLESv2.dylib inside a macOS app bundle).
+            // This is an optional override for deployments where @rpath-based discovery is not sufficient.
+            // It is intentionally scoped to macOS to avoid changing loader semantics elsewhere.
+            if (m_handle == nullptr)
+            {
+                const char* const extraDir = std::getenv("GLRESOLVER_DYLIB_DIR");
+                if (extraDir != nullptr && extraDir[0] != '\00')
+                {
+                    std::string full(extraDir);
+                    if (!full.empty() && full.back() != '/')
+                    {
+                        full.push_back('/');
+                    }
+                    full += name;
+                    ::dlerror();
+
+                    m_handle = ::dlopen(full.c_str(), RTLD_NOW | RTLD_LOCAL);
+
+                    if (m_handle != nullptr)
+                    {
+                        m_loadedName = full;
+                        LOG_DEBUG(std::string("[DynamicLibrary] opened: ") + m_loadedName);
+                        return true;
+                    }
+                }
+            }
+
+#endif
+
 #endif
 
             if (m_handle != nullptr)
             {
                 m_loadedName = name;
+                LOG_DEBUG(std::string("[DynamicLibrary] opened: ") + m_loadedName);
                 return true;
             }
 
@@ -382,6 +460,10 @@ auto TrimTrailingWhitespace(std::string& str) -> void
 
         } // for loop
 
+        if (!reason.empty())
+        {
+            LOG_DEBUG(std::string("[DynamicLibrary] open failed: ") + reason);
+        }
         return false;
     }
 
@@ -467,7 +549,7 @@ auto TrimTrailingWhitespace(std::string& str) -> void
         }
 
         // If the host has already loaded EGL/GLES provider DLLs (e.g., ANGLE), probe those modules as well.
-        // This is a best-effort enhancement for applications embedding this library where we may not have
+        // This is a enhancement for applications embedding this library where we may not have
         // opened the provider libraries ourselves.
         {
             static constexpr std::array<const char*, 6> moduleNames =

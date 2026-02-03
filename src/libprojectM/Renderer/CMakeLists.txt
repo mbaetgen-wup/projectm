@@ -32,12 +32,14 @@ add_library(Renderer OBJECT
         MilkdropNoise.cpp
         MilkdropNoise.hpp
         OpenGL.h
-        PlatformGLContextCheck.cpp
-        PlatformGLContextCheck.hpp
-        PlatformGLResolver.cpp
-        PlatformGLResolver.hpp
-        PlatformLoader.cpp
-        PlatformLoader.hpp
+        Platform/DynamicLibrary.cpp
+        Platform/DynamicLibrary.hpp
+        Platform/GladLoader.cpp
+        Platform/GladLoader.hpp
+        Platform/GLProbe.cpp
+        Platform/GLProbe.hpp
+        Platform/GLResolver.cpp
+        Platform/GLResolver.hpp
         Point.hpp
         PresetTransition.cpp
         PresetTransition.hpp

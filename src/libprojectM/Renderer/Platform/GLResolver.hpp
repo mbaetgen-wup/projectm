@@ -1,7 +1,6 @@
 #pragma once
 
-#include "PlatformGLContextCheck.hpp"
-#include "PlatformLoader.hpp"
+#include "DynamicLibrary.hpp"
 
 #include <condition_variable>
 #include <cstdint>
@@ -73,29 +72,67 @@ enum class Backend : std::uint8_t
 using UserResolver = void* (*)(const char* name, void* userData);
 
 /**
- * @brief Universal cross-platform runtime GL/GLES procedure resolver for GLAD2 (non-MX).
+ * @brief Universal cross-platform runtime GL/GLES procedure resolver.
  *
  * Compile-time API selection:
+ *
  *  - If USE_GLES is defined, loads OpenGL ES entry points via gladLoadGLES2() and
  *    expects a current EGL+GLES or WebGL context.
+ *
  *  - Otherwise, loads desktop OpenGL entry points via gladLoadGL() and expects a
  *    current desktop GL context (WGL/GLX/CGL or EGL+GL).
  *
  * Supported backends/wrappers: EGL (including ANGLE), GLX (including libGLVND), WGL,
  * macOS CGL, WebGL (Emscripten), plus an optional user resolver.
  *
+ *
  * Lifecycle:
+ *
  *  - The resolver is a process-singleton.
+ *
  *  - GL libraries that have been opened are not unloaded to avoid conflicts with the host app.
  *    They will be released by OS during process tear-down.
  *
+ *
  * Initialization:
+ *
  *  - Must be called after a context is created and made current on the calling thread.
+
  *  - Thread-safe; intended to be called during startup before any resolution occurs.
- *  - If multiple backends appear to be current, EGL is preferred.
+
+ *  - If multiple backends appear to be current, the resolver applies a platform policy (EGL-preferred on most platforms; CGL-preferred on macOS by default when CGL is current).
+ *
+ *
+ * Environment variables:
+ *
+ *  - GLRESOLVER_STRICT_CONTEXT_GATE=0
+ *      Disable the per-call check that the detected backend is still current when resolving symbols.
+ *      Default is 1 (enabled). Useful for debugging unusual context switching in host apps.
+
+ *  - GLRESOLVER_MACOS_PREFER_CGL=0
+ *      On macOS, prefer EGL when both EGL and CGL appear current. Default is 1 (prefer CGL).
+
+ * - GLRESOLVER_DYLIB_DIR=path
+ *      On macOS, allow callers to specify an explicit search directory for bundled dylibs.
+ *      Prefer @rpath-based deployment (LC_RPATH / install names) when possible; this is intended as an override.
+ *
+ * Compile-time switches:
+ *
+ * - GLRESOLVER_LOADER_DIAGNOSTICS=1
+ *   When enabled, the loader prints diagnostics for unusual ABI situations. Default is disabled.
+
+ * - GLRESOLVER_ALLOW_UNSAFE_DLL_SEARCH=1 (Windows only)
+ *    If the OS loader does not support LOAD_LIBRARY_SEARCH_* flags (ERROR_INVALID_PARAMETER),
+ *    this loader tries to load from explicit safe locations (application directory and
+ *    System32 for known system DLLs).
+ *    As a last resort, some applications may still want to fall back to LoadLibrary(name)
+ *   (which can consult legacy search paths such as the process current working directory).
+ *   This is disabled by default for security hardening.
  *
  * Resolution order (non-Emscripten):
+ *
  *  1) User resolver callback (if provided, resolution continues if user provider returns a nullptr)
+ *
  *  2) Backend provider:
  *      - EGL: eglGetProcAddress
  *        - Queried for all symbols only when EGL_KHR_get_all_proc_addresses or
@@ -105,8 +142,11 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *        - Queried only for glX* or extension-style names.
  *      - WGL: wglGetProcAddress
  *        - Filters sentinel values; prefers exported symbols for core OpenGL 1.1 entry points.
+ *
  *  3) Global symbol scope lookup (dlsym(RTLD_DEFAULT) / GetProcAddress on already-loaded modules)
+ *
  *  4) Direct exports from explicitly opened libraries (EGL/GL/GLX)
+ *
  *  5) GetProcAddress fallback
  *     - EGL: Try to resolve function via eglGetProcAddress as fallback.
  *            Always enabled.
@@ -114,7 +154,9 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *            Optional, enabled via PLATFORM_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK.
  *
  * Resolution order (Emscripten/WebGL):
+ *
  *  1) User resolver callback (if provided)
+ *
  *  2) emscripten_webgl2_get_proc_address / emscripten_webgl_get_proc_address
  *     (prefers the current context major version)
  *
@@ -138,7 +180,7 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *   |     |       macOS:   libGLESv3.dylib/libGLESv2.dylib
  *   |     |       Linux:   libGLESv3.so.* and/or libGLESv2.so.*
  *   |     |       Android: libGLESv3.so/libGLESv2.so
- *   |     +-- open GLX library (Linux/Unix, best-effort)
+ *   |     +-- open GLX library (Linux/Unix)
  *   |           libGLX.so.*
  *   |
  *   +-- ResolveProviderFunctions()
@@ -153,16 +195,6 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *   +-- HasCurrentContext()                          (fails if no current context is present)
  *   |
  *   +-- DetectBackend()                              (prefers EGL, then WGL/CGL/GLX depending on platform)
- *   |
- *   +-- gladLoadGL(...) / gladLoadGLES2(...)         (GLAD calls back into GLResolver::GetProcAddress)
- *   |
- *   +-- CheckGLRequirements()
- *   |     Desktop GL: OpenGL    >= 3.3
- *   |     GLES:       OpenGL ES >= 3.0
- *   |
- *   +-- if ready:
- *         SOIL_GL_SetResolver(&GLResolver::GladResolverThunk)
- *         SOIL_GL_Init()
  *
  * ## GetProcAddress Flow
  *
@@ -187,8 +219,8 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *   |     m_glLib.GetSymbol(name)
  *   |     m_glxLib.GetSymbol(name)
  *   |
- *   +-- Late best-effort eglGetProcAddress fallback (EGL only)
- *   |                    glXGetProcAddress fallback (GLX only, disabled per default)
+ *   +-- Late eglGetProcAddress fallback (EGL only)
+ *   |        glXGetProcAddress fallback (GLX only, disabled per default)
  *   |
  *  \/
  * Not Found (nullptr)
@@ -240,9 +272,13 @@ public:
 
     /**
      * @brief Returns the backend detected during the last successful Initialize() call.
-     *
      */
     auto CurrentBackend() const -> Backend;
+
+    /**
+     * @brief Returns true if a user resolver is configured.
+     */
+    auto HasUserResolver() const -> bool;
 
     /**
      * @brief Resolves a function pointer by consulting all sources in priority order.
@@ -266,7 +302,7 @@ public:
      * @param name Function name.
      * @return Procedure address or nullptr.
      */
-    static auto GladResolverThunk(const char* name) -> void*;
+    static auto GetProcAddressThunk(const char* name) -> void*;
 
 private:
 
@@ -336,6 +372,10 @@ private:
         UserResolver m_userResolver{nullptr};                           //!< User provided function resolver. Optional, may be null.
         void* m_userData{nullptr};                                      //!< User data to pass to user provided function resolver.
 
+        DynamicLibrary m_eglLib;                                        //!< EGL library handle. Optional, may be empty.
+        DynamicLibrary m_glLib;                                         //!< GL library handle. Optional, may be empty.
+        DynamicLibrary m_glxLib;                                        //!< GLX library handle. Optional, may be empty.
+
         EglGetProcAddressFn m_eglGetProcAddress{nullptr};               //!< eglGetProcAddress handle.
         bool m_eglGetAllProcAddresses{false};                           //!< True if EGL_KHR_get_all_proc_addresses (or client variant) is advertised.
         EglGetCurrentContextFn m_eglGetCurrentContext{nullptr};         //!< eglGetCurrentContext handle.
@@ -360,26 +400,20 @@ private:
 
     }; // struct ResolverState
 
-    auto OpenNativeLibraries() -> void;
-    auto ResolveProviderFunctions() -> void;
-    auto ProbeCurrentContext() const -> CurrentContextProbe;
-    auto HasCurrentContext(const CurrentContextProbe& probe, std::string& outReason) -> bool;
-    auto DetectBackend(const CurrentContextProbe& probe) -> void;
-    auto CheckGLRequirementsUnlocked() -> GLContextCheckResult;
-    bool VerifyBackendIsCurrent(const ResolverState& state, const CurrentContextProbe& currentContext) const;
-    auto static LoadGladUnlocked(const ResolverState& state) -> bool;
-    static auto ResolveUnlocked(const char* name, const ResolverState& state) -> void*;
+    static auto OpenNativeLibraries(ResolverState& state) -> void;
+    static auto ResolveProviderFunctions(ResolverState& state) -> void;
+    static auto ProbeCurrentContext(const ResolverState& state) -> CurrentContextProbe;
+    static auto HasCurrentContext(const CurrentContextProbe& probe, std::string& outReason) -> bool;
+    static auto DetectBackend(const CurrentContextProbe& probe) -> Backend;
+    auto VerifyBackendIsCurrent(Backend backend, const CurrentContextProbe& currentContext) const -> bool;
+    static auto ResolveProcAddress(const ResolverState& state, const char* name) -> void*;
 
     mutable std::mutex m_mutex;                                     //!< Mutex to synchronize initialization and access.
     bool m_loaded{false};                                           //!< True if the resolver is initialized.
     bool m_initializing{false};                                     //!< True while an Initialize() attempt is in-flight.
     mutable std::condition_variable m_initCv;                       //!< Signals completion of Initialize().
 
-    DynamicLibrary m_eglLib;                                        //!< EGL library handle. Optional, may be empty.
-    DynamicLibrary m_glLib;                                         //!< GL library handle. Optional, may be empty.
-    DynamicLibrary m_glxLib;                                        //!< GLX library handle. Optional, may be empty.
-
-    ResolverState m_state;                                          //!< Resolver properties and resolved pointers.
+    std::shared_ptr<const ResolverState> m_state;                   //!< Resolver properties and resolved pointers.
 };
 
 /**

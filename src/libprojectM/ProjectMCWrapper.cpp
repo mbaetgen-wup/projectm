@@ -1,11 +1,13 @@
 #include "ProjectMCWrapper.hpp"
 
+#include "Renderer/Platform/GladLoader.hpp"
+
 #include <projectM-4/projectM.h>
 
 #include <Logging.hpp>
 
 #include <Audio/AudioConstants.hpp>
-#include <Renderer/PlatformGLResolver.hpp>
+#include <Renderer/Platform/GLResolver.hpp>
 
 #include <projectM-4/parameters.h>
 #include <projectM-4/render_opengl.h>
@@ -76,13 +78,15 @@ projectm_handle projectm_create_with_opengl_load_proc(void* (*load_proc)(const c
 {
     try
     {
-        // obtain shared resolver instance
-        auto& glResolver = libprojectM::Renderer::Platform::GLResolver::Instance();
+        // Init resolver to discover gl function pointers (guarded internally, valid to call multiple times)
+        // Note: only the initial load_proc will be used, parameters on subsequent calls are ignored
+        if (!libprojectM::Renderer::Platform::GLResolver::Instance().Initialize(load_proc, user_data))
+        {
+            return nullptr;
+        }
 
-        // init resolver to discover gl function pointers and init GLAD
-        // Initialize() is guarded internally, may be called multiple times
-        auto success = glResolver.Initialize(load_proc, user_data);
-        if (!success)
+        // Check GL requirements and init GLAD (guarded internally, valid to call multiple times)
+        if (!libprojectM::Renderer::Platform::GladLoader::Instance().LoadGlad())
         {
             return nullptr;
         }
