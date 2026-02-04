@@ -93,7 +93,7 @@ auto GladLoader::LoadGlad() -> bool
 
     if (!GLResolver::Instance().IsLoaded())
     {
-        LOG_ERROR(std::string("[GladLoader] Cannot load GLAD, GLResolver is not initialized"));
+        LOG_ERROR(std::string("[GladLoader] Cannot load GLAD: GLResolver is not initialized"));
         return false;
     }
 

@@ -8,7 +8,7 @@
 #include <mutex>
 #include <string>
 
-// Optional GLX fallback for resolving non-extension gl* names via glXGetProcAddress*.
+// GLX fallback for resolving non-extension gl* names via glXGetProcAddress*.
 //
 // Default behavior is conservative: only extension-style names are resolved via
 // glXGetProcAddress*, because some implementations return non-null for unknown
@@ -16,8 +16,8 @@
 //
 // If support for legacy/non-GLVND stacks is required where some core entry points are not
 // exported from libGL/libOpenGL, you may enable this as a last-resort fallback.
-#ifndef PLATFORM_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK
-#define PLATFORM_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK 0
+#ifndef GLRESOLVER_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK
+#define GLRESOLVER_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK 0
 #endif
 
 namespace libprojectM
@@ -111,9 +111,6 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *
  * Compile-time switches:
  *
- * - GLRESOLVER_LOADER_DIAGNOSTICS=1
- *     When enabled, the loader prints diagnostics for unusual ABI situations. Default is disabled.
- *
  * - GLRESOLVER_ALLOW_UNSAFE_DLL_SEARCH=1 (legacy Windows only)
  *     If the OS loader does not support LOAD_LIBRARY_SEARCH_* flags (ERROR_INVALID_PARAMETER),
  *     this loader tries to load from explicit safe locations (application directory and
@@ -121,6 +118,13 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *     As a last resort, some applications may still want to fall back to LoadLibrary(name)
  *     (which can consult legacy search paths such as the process current working directory).
  *     This is disabled by default for security hardening.
+ *
+ * - GLRESOLVER_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK=1
+ *     Enable GLX fallback for resolving non-extension gl* names via glXGetProcAddress*.
+ *     Disabled by default.
+ *
+ * - GLRESOLVER_LOADER_DIAGNOSTICS=1
+ *     When enabled, the loader prints diagnostics for unusual ABI situations. Default is disabled.
  *
  * - USE_GLES
  *   Switch for compile-time API selection:
@@ -154,7 +158,7 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *     - EGL: Try to resolve function via eglGetProcAddress as fallback.
  *            Always enabled.
  *     - GLX: Try to resolve function via glXGetProcAddress as fallback.
- *            Optional, enabled via PLATFORM_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK.
+ *            Optional, enabled via GLRESOLVER_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK.
  *
  * Resolution order (Emscripten/WebGL):
  *
@@ -345,24 +349,24 @@ private:
      */
     struct CurrentContextProbe
     {
-        bool eglLibOpened{false};
-        bool eglAvailable{false};
-        bool eglCurrent{false};
+        bool eglLibOpened{false};  //!< True if an EGL library was opened.
+        bool eglAvailable{false};  //!< True if EGL entry points were resolved.
+        bool eglCurrent{false};    //!< True if an EGL context appears current.
 
-        bool glxLibOpened{false};
-        bool glxAvailable{false};
-        bool glxCurrent{false};
+        bool glxLibOpened{false};  //!< True if a GLX library was opened.
+        bool glxAvailable{false};  //!< True if GLX entry points were resolved.
+        bool glxCurrent{false};    //!< True if a GLX context appears current.
 
-        bool wglLibOpened{false};
-        bool wglAvailable{false};
-        bool wglCurrent{false};
+        bool wglLibOpened{false};  //!< True if a WGL library was opened.
+        bool wglAvailable{false};  //!< True if WGL entry points were resolved.
+        bool wglCurrent{false};    //!< True if a WGL context appears current.
 
         bool cglLibOpened{false};
-        bool cglAvailable{false};
-        bool cglCurrent{false};
+        bool cglAvailable{false};  //!< True if CGL entry points were resolved.
+        bool cglCurrent{false};    //!< True if a CGL context appears current.
 
-        bool webglAvailable{false};
-        bool webglCurrent{false};
+        bool webglAvailable{false};  //!< True if WebGL entry points were resolved.
+        bool webglCurrent{false};    //!< True if a WebGL context appears current.
     };
 
     /**

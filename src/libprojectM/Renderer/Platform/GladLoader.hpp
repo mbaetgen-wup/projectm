@@ -7,7 +7,7 @@ namespace Renderer {
 namespace Platform {
 
 /**
- * @brief Helper for GLAD loading and GL projectM specific GL requirements checks.
+ * @brief Helper for GLAD loading and projectM-specific GL requirements checks.
  *
  * @note This loader is a process-singleton.
  * @note The GLResolver needs to be initialized first, before using this loader.
@@ -44,7 +44,7 @@ private:
     auto CheckGLRequirements() -> bool;
 
 
-    bool m_isLoaded{false};                 //!< Flag to indicate is GLAD has been loaded.
+    bool m_isLoaded{false};                 //!< Flag indicating whether GLAD has been loaded.
     mutable std::mutex m_mutex;             //!< Mutex to synchronize initialization.
 };
 

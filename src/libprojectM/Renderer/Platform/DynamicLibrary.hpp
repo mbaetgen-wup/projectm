@@ -378,7 +378,7 @@ public:
 
 private:
     LibHandle m_handle{};           //!< Library handle used to access the system library.
-    std::string m_loadedName;       //< Successfully opened library name.
+    std::string m_loadedName;       //!< Successfully opened library name.
     bool m_closeOnDestruct{false};  //!< If true, Close() is called from the destructor.
 };
 

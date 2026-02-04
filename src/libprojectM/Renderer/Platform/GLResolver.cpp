@@ -318,7 +318,7 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
 
         diag += std::string(" glx_get_proc=\"") + (state.m_glxGetProcAddress != nullptr ? "yes" : "no") + "\"";
 
-#if PLATFORM_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK
+#if GLRESOLVER_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK
 
         diag += " glx_policy=\"ext+fallback\"";
 
@@ -341,7 +341,7 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
         m_loaded = false;
 
         // Provide a concrete diagnostic to help debug "no backend" cases.
-        LOG_ERROR(std::string("[GLResolver] No current GL backend detected. ")
+        LOG_ERROR(std::string("[GLResolver] No current GL backend detected: ")
                               + "egl_current=\"" + (currentContext.eglCurrent ? "yes" : "no") + "\"" 
                               + " wgl_current=\"" + (currentContext.wglCurrent ? "yes" : "no") + "\"" 
                               + " glx_current=\"" + (currentContext.glxCurrent ? "yes" : "no") + "\"" 
@@ -351,7 +351,7 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
         m_initializing = false;
         m_initCv.notify_all();
         lock.unlock();
-        LOG_ERROR("[GLResolver] Failed to detect an active GL backend for the current context.");
+        LOG_ERROR("[GLResolver] Failed to detect an active GL backend for the current context");
         return false;
     }
 
@@ -436,13 +436,13 @@ auto GLResolver::GetProcAddress(const char* name) const -> void*
 
     if (m_initializing)
     {
-        LOG_DEBUG(std::string("[GLResolver] GetProcAddress called while initialization is in-flight; waiting."));
+        LOG_DEBUG(std::string("[GLResolver] GetProcAddress called while initialization is in-flight; waiting"));
         m_initCv.wait(lock, [this]() { return !m_initializing; });
     }
 
     if (!m_loaded)
     {
-        LOG_ERROR(std::string("[GLResolver] GetProcAddress called without initialization."));
+        LOG_ERROR(std::string("[GLResolver] GetProcAddress called without initialization"));
         return nullptr;
     }
 
@@ -842,7 +842,7 @@ void GLResolver::ResolveProviderFunctions(ResolverState& state)
             }
         }
 
-        LOG_DEBUG(std::string("[GLResolver] EGL get_all_proc_addresses=") + (state.m_eglGetAllProcAddresses ? "yes" : "no"));
+        LOG_DEBUG(std::string("[GLResolver] EGL  get_all_proc_addresses=") + (state.m_eglGetAllProcAddresses ? "yes" : "no"));
     }
 
 #ifdef _WIN32

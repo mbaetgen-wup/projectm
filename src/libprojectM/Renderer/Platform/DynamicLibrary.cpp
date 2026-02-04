@@ -258,8 +258,8 @@ DynamicLibrary::~DynamicLibrary()
                 }
 
                 // Absolute path heuristics for Win32:
-                //  - "C:\\..."  (drive)
-                //  - "\\\\server\\share..." (UNC)
+                //  - "C:\\path\\to\\library.dll"  (drive)
+                //  - "\\\\server\\share\\library.dll" (UNC)
                 const bool isDriveAbs = (std::strlen(dllPath) > 2u) && (dllPath[1] == ':') &&
                                         (dllPath[2] == '\\' || dllPath[2] == '/');
                 const bool isUncAbs = (dllPath[0] == '\\' && dllPath[1] == '\\');
@@ -380,9 +380,10 @@ DynamicLibrary::~DynamicLibrary()
             if (m_handle == nullptr)
             {
                 const char* const extraDir = std::getenv("GLRESOLVER_DYLIB_DIR");
-                if (extraDir != nullptr && extraDir[0] != '\00')
+                if (extraDir != nullptr && extraDir[0] != '\0')
                 {
                     std::string full(extraDir);
+                    LOG_DEBUG(std::string("[DynamicLibrary] using ") + extraDirVar + " to locate: " + name);
                     if (!full.empty() && full.back() != '/')
                     {
                         full.push_back('/');
