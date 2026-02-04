@@ -19,3 +19,15 @@ add_executable(projectM4_CXX_Test
 target_link_libraries(projectM4_CXX_Test
         libprojectM::projectM
         )
+
+if(UNIX AND NOT APPLE AND NOT ANDROID AND NOT EMSCRIPTEN)
+    find_package(X11 REQUIRED)
+
+    if(TARGET X11::X11)
+        target_link_libraries(projectM4_CXX_Test PRIVATE X11::X11)
+    else()
+        # Fallback for older CMake/FindX11 behavior
+        target_include_directories(projectM4_CXX_Test PRIVATE ${X11_INCLUDE_DIR})
+        target_link_libraries(projectM4_CXX_Test PRIVATE ${X11_LIBRARIES})
+    endif()
+endif()

@@ -355,7 +355,7 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
         return false;
     }
 
-    m_state = std::make_shared<const ResolverState>(std::move(state));
+    m_state = std::make_shared<ResolverState>(std::move(state));
     m_initializing = false;
     m_loaded = true;
     m_initCv.notify_all();
