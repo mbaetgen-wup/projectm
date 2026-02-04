@@ -383,7 +383,7 @@ DynamicLibrary::~DynamicLibrary()
                 if (extraDir != nullptr && extraDir[0] != '\0')
                 {
                     std::string full(extraDir);
-                    LOG_DEBUG(std::string("[DynamicLibrary] using ") + extraDirVar + " to locate: " + name);
+                    LOG_DEBUG(std::string("[DynamicLibrary] using ") + extraDir + " to locate: " + name);
                     if (!full.empty() && full.back() != '/')
                     {
                         full.push_back('/');
