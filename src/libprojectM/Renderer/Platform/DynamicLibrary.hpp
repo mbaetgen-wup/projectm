@@ -204,7 +204,20 @@ auto FunctionToInteger(Fn func) -> std::uintptr_t
 }
 
 /**
- * @brief Parses a bool-ish env var. Truthy: 1, y, yes, t, true, on (case-insensitive). Falsy: 0, n, no, f, false, off.
+ * @brief Reads a bool-ish feature flag from an environment variable. Truthy: 1, y, yes, t, true, on (case-insensitive). Falsy: 0, n, no, f, false, off.
+ *
+ * Interprets the environment variable named @p name as a boolean value using a
+ * simple, case-insensitive prefix check:
+ * - **true** if the first character is one of: `1`, `y`, `t` (e.g. "1", "yes", "true")
+ * - **false** if the first character is one of: `0`, `n`, `f` (e.g. "0", "no", "false")
+ * - Special-case: values beginning with **"on"** -> true, **"off"** -> false (case-insensitive)
+ *
+ * If @p name is null, the variable is not set, or the value is empty/unknown,
+ * the function returns @p defaultValue.
+ *
+ * @param name Environment variable name.
+ * @param defaultValue Value to return when the variable is missing, empty, or unrecognized.
+ * @return Parsed boolean value, or @p defaultValue if not determinable.
  */
 auto EnvFlagEnabled(const char* name, bool defaultValue) -> bool;
 

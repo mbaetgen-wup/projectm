@@ -53,17 +53,21 @@ struct GLProbeResult
 {
     bool success{false};            //!< True if requirements are met
     std::string reason;             //!< Failure reason (empty on success)
-    GLRequirements req;      //!< Requirements used
-    GLInfo info;             //!< Detected context info
+    GLRequirements req;             //!< Requirements used
+    GLInfo info;                    //!< Detected context info
 };
 
 /**
  * @brief GL requirements verification check using a builder pattern.
+ * @note GL function pointers can be supplied by the user, GLResolver will be used if not present.
+ *       Does not dependent on GLAD resolved GL functions in order to allow checks before GLAD is loaded.
  */
 class GLProbe final
 {
 public:
-
+    /**
+     * @brief GL function pointer parameter type.
+     */
     struct GLFunctions
     {
         /**

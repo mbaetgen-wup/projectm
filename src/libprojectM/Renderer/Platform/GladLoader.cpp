@@ -7,6 +7,7 @@
 #include "Logging.hpp"
 
 namespace {
+
 /**
  * @brief Resolves a GL function by name using GladResolverThunk.
  * @note Adapts opaque void* handle to GLAD type

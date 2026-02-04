@@ -10,16 +10,17 @@
 #include <cstdlib>
 
 #ifdef _WIN32
-#include <limits>
-#endif
 
-#ifdef _WIN32
+#include <limits>
 #include <windows.h>
+
 #endif
 
 #ifdef __EMSCRIPTEN__
+
 #include <emscripten/html5.h>
 #include <emscripten/html5_webgl.h>
+
 #endif
 
 namespace libprojectM {
@@ -27,7 +28,6 @@ namespace Renderer {
 namespace Platform {
 
 namespace {
-
 
 auto StrictContextGateEnabled() -> bool
 {
@@ -252,9 +252,9 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
 
     lock.unlock();
 
-    // Find source for gl functions.
 #ifndef __EMSCRIPTEN__
 
+    // Find source for gl functions. Emscripten does not have libs.
     OpenNativeLibraries(state);
     ResolveProviderFunctions(state);
 
@@ -262,7 +262,8 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
 
     // Try to find a current gl context.
     auto currentContext = ProbeCurrentContext(state);
-        LOG_DEBUG(std::string("[GLResolver] CurrentContextProbe:") +
+
+    LOG_DEBUG(std::string("[GLResolver] CurrentContextProbe:") +
                          " egl_current=\"" + (currentContext.eglCurrent ? "yes" : "no") + "\"" +
                          " glx_current=\"" + (currentContext.glxCurrent ? "yes" : "no") + "\"" +
                          " wgl_current=\"" + (currentContext.wglCurrent ? "yes" : "no") + "\"" +
@@ -340,7 +341,6 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
     {
         m_loaded = false;
 
-        // Provide a concrete diagnostic to help debug "no backend" cases.
         LOG_ERROR(std::string("[GLResolver] No current GL backend detected: ")
                               + "egl_current=\"" + (currentContext.eglCurrent ? "yes" : "no") + "\"" 
                               + " wgl_current=\"" + (currentContext.wglCurrent ? "yes" : "no") + "\"" 
@@ -383,7 +383,7 @@ auto GLResolver::HasUserResolver() const -> bool
     return m_state == nullptr ? false : m_state->m_userResolver != nullptr;
 }
 
-auto GLResolver::VerifyBackendIsCurrent(Backend backend, const CurrentContextProbe& currentContext) const -> bool
+auto GLResolver::VerifyBackendIsCurrent(Backend backend, const CurrentContextProbe& currentContext) -> bool
 {
     switch (backend)
     {
@@ -555,6 +555,7 @@ auto GLResolver::GetProcAddress(const char* name) const -> void*
 
 void GLResolver::OpenNativeLibraries(ResolverState& state)
 {
+#ifndef __EMSCRIPTEN__
     // macOS or minimal EGL setups may fail to open.
     std::string reason;
 
@@ -696,10 +697,12 @@ void GLResolver::OpenNativeLibraries(ResolverState& state)
     {
         LOG_DEBUG(std::string("[GLResolver] Failed to open GL library: ") + reason);
     }
+#endif // #ifndef __EMSCRIPTEN__
 }
 
 void GLResolver::ResolveProviderFunctions(ResolverState& state)
 {
+#ifndef __EMSCRIPTEN__
     // EGL
     {
         // Note: eglGetProcAddress is the canonical mechanism for resolving EGL/GLES entry points,
@@ -980,6 +983,7 @@ void GLResolver::ResolveProviderFunctions(ResolverState& state)
     LOG_DEBUG(std::string("[GLResolver] GLX  handle=") +
               std::to_string(reinterpret_cast<std::uintptr_t>(state.m_glxLib.Handle())) +
               " lib=\"" + state.m_glxLib.LoadedName() + "\"");
+#endif // #ifndef __EMSCRIPTEN__
 }
 
 auto GLResolver::ProbeCurrentContext(const ResolverState& state) -> CurrentContextProbe

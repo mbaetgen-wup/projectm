@@ -370,7 +370,7 @@ private:
     };
 
     /**
-     * All values needed for the resolver are encapsulated in this struct, so they can be copied easily.
+     * All values needed for the resolver are encapsulated in this struct to keep them immutable later.
      */
     struct ResolverState
     {
@@ -407,12 +407,13 @@ private:
 
     }; // struct ResolverState
 
+    // use static methods to prohibit access to members, force state constness
     static auto OpenNativeLibraries(ResolverState& state) -> void;
     static auto ResolveProviderFunctions(ResolverState& state) -> void;
     static auto ProbeCurrentContext(const ResolverState& state) -> CurrentContextProbe;
     static auto HasCurrentContext(const CurrentContextProbe& probe, std::string& outReason) -> bool;
     static auto DetectBackend(const CurrentContextProbe& probe) -> Backend;
-    auto VerifyBackendIsCurrent(Backend backend, const CurrentContextProbe& currentContext) const -> bool;
+    static auto VerifyBackendIsCurrent(Backend backend, const CurrentContextProbe& currentContext) -> bool;
     static auto ResolveProcAddress(const ResolverState& state, const char* name) -> void*;
 
     mutable std::mutex m_mutex;                                     //!< Mutex to synchronize initialization and access.

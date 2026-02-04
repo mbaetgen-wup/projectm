@@ -42,7 +42,7 @@ auto loadProcDispatch(const char* name, void* userData) -> void*
 
 projectMSDL::projectMSDL(SDL_GLContext glCtx, const std::string& presetPath)
     : _openGlContext(glCtx)
-    , _projectM(projectm_create_with_opengl_load_proc(&loadProcDispatch, nullptr))
+    , _projectM(projectm_create())
     , _playlist(projectm_playlist_create(_projectM))
 {
     projectm_get_window_size(_projectM, &_width, &_height);
