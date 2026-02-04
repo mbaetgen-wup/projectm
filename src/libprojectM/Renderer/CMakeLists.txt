@@ -88,6 +88,13 @@ target_link_libraries(Renderer
         ${PROJECTM_OPENGL_LIBRARIES}
         )
 
+if(PROJECTM_FILESYSTEM_USE_BOOST)
+    target_link_libraries(Renderer
+        PRIVATE
+        ${PROJECTM_FILESYSTEM_LIBRARY}
+    )
+endif()
+
 set_target_properties(Renderer PROPERTIES
         FOLDER libprojectM
         )

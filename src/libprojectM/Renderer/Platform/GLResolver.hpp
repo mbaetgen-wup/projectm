@@ -74,16 +74,9 @@ using UserResolver = void* (*)(const char* name, void* userData);
 /**
  * @brief Universal cross-platform runtime GL/GLES procedure resolver.
  *
- * Compile-time API selection:
- *
- *  - If USE_GLES is defined, loads OpenGL ES entry points via gladLoadGLES2() and
- *    expects a current EGL+GLES or WebGL context.
- *
- *  - Otherwise, loads desktop OpenGL entry points via gladLoadGL() and expects a
- *    current desktop GL context (WGL/GLX/CGL or EGL+GL).
- *
- * Supported backends/wrappers: EGL (including ANGLE), GLX (including libGLVND), WGL,
- * macOS CGL, WebGL (Emscripten), plus an optional user resolver.
+ * @note GL API (either GL or GLES) is selected at compile-time.
+ * @note Supported backends/wrappers: EGL (including ANGLE), GLX (including libGLVND), WGL,
+ *       macOS CGL, WebGL (Emscripten), plus an optional user resolver.
  *
  *
  * Lifecycle:
@@ -97,9 +90,9 @@ using UserResolver = void* (*)(const char* name, void* userData);
  * Initialization:
  *
  *  - Must be called after a context is created and made current on the calling thread.
-
+ *
  *  - Thread-safe; intended to be called during startup before any resolution occurs.
-
+ *
  *  - If multiple backends appear to be current, the resolver applies a platform policy (EGL-preferred on most platforms; CGL-preferred on macOS by default when CGL is current).
  *
  *
@@ -108,26 +101,36 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *  - GLRESOLVER_STRICT_CONTEXT_GATE=0
  *      Disable the per-call check that the detected backend is still current when resolving symbols.
  *      Default is 1 (enabled). Useful for debugging unusual context switching in host apps.
-
+ *
  *  - GLRESOLVER_MACOS_PREFER_CGL=0
  *      On macOS, prefer EGL when both EGL and CGL appear current. Default is 1 (prefer CGL).
-
+ *
  * - GLRESOLVER_DYLIB_DIR=path
- *      On macOS, allow callers to specify an explicit search directory for bundled dylibs.
- *      Prefer @rpath-based deployment (LC_RPATH / install names) when possible; this is intended as an override.
+ *     On macOS, allow callers to specify an explicit search directory for bundled dylibs.
+ *     Prefer @rpath-based deployment (LC_RPATH / install names) when possible; this is intended as an override.
  *
  * Compile-time switches:
  *
  * - GLRESOLVER_LOADER_DIAGNOSTICS=1
- *   When enabled, the loader prints diagnostics for unusual ABI situations. Default is disabled.
-
- * - GLRESOLVER_ALLOW_UNSAFE_DLL_SEARCH=1 (Windows only)
- *    If the OS loader does not support LOAD_LIBRARY_SEARCH_* flags (ERROR_INVALID_PARAMETER),
- *    this loader tries to load from explicit safe locations (application directory and
- *    System32 for known system DLLs).
- *    As a last resort, some applications may still want to fall back to LoadLibrary(name)
- *   (which can consult legacy search paths such as the process current working directory).
- *   This is disabled by default for security hardening.
+ *     When enabled, the loader prints diagnostics for unusual ABI situations. Default is disabled.
+ *
+ * - GLRESOLVER_ALLOW_UNSAFE_DLL_SEARCH=1 (legacy Windows only)
+ *     If the OS loader does not support LOAD_LIBRARY_SEARCH_* flags (ERROR_INVALID_PARAMETER),
+ *     this loader tries to load from explicit safe locations (application directory and
+ *     System32 for known system DLLs).
+ *     As a last resort, some applications may still want to fall back to LoadLibrary(name)
+ *     (which can consult legacy search paths such as the process current working directory).
+ *     This is disabled by default for security hardening.
+ *
+ * - USE_GLES
+ *   Switch for compile-time API selection:
+ *
+ *   - If USE_GLES is defined, loads OpenGL ES entry points and
+ *     expects a current EGL+GLES or WebGL context.
+ *
+ *   - Otherwise, loads desktop OpenGL entry points and
+ *     expects a current desktop GL context (WGL/GLX/CGL or EGL+GL).
+ *
  *
  * Resolution order (non-Emscripten):
  *

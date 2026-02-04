@@ -8,18 +8,18 @@ endif()
 
 project(projectM_CXX_Test
         LANGUAGES C CXX
-)
+        )
 
 find_package(projectM4 REQUIRED)
 
 add_executable(projectM4_CXX_Test
         main.cpp
-)
+        )
 
 target_link_libraries(projectM4_CXX_Test
         PRIVATE
         libprojectM::projectM
-)
+        )
 
 if(UNIX AND NOT APPLE AND NOT ANDROID AND NOT EMSCRIPTEN)
     find_package(X11 REQUIRED)
