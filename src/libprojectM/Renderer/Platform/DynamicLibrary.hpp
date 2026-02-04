@@ -250,6 +250,9 @@ public:
     DynamicLibrary(const DynamicLibrary&) = delete;
     DynamicLibrary& operator=(const DynamicLibrary&) = delete;
 
+    DynamicLibrary(DynamicLibrary&&) noexcept = default;
+    DynamicLibrary& operator=(DynamicLibrary&&) noexcept = default;
+
     inline auto Open(const char* const*, std::string&) -> bool
     {
         return false;
