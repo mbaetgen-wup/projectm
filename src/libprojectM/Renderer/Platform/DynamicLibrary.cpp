@@ -4,6 +4,7 @@
 #include "Logging.hpp"
 
 #include <cstdio>
+#include <mutex>
 
 #ifndef __EMSCRIPTEN__
 
@@ -54,12 +55,10 @@
 #endif
 
 #else // #ifdef _WIN32
-
 #include <dlfcn.h>
-
 #endif // #ifdef _WIN32
 
-#endif
+#endif // #ifndef __EMSCRIPTEN__
 
 namespace libprojectM {
 namespace Renderer {
@@ -67,9 +66,6 @@ namespace Platform {
 
 
 namespace {
-
-#ifdef _WIN32
-
 /**
  * Removes all trailing whitespaces for the given string.
  *
@@ -88,8 +84,6 @@ auto TrimTrailingWhitespace(std::string& str) -> void
         break;
     }
 }
-
-#endif
 
 } // namespace
 
@@ -186,7 +180,7 @@ DynamicLibrary::~DynamicLibrary()
                 continue;
             }
 
-            LOG_DEBUG(std::string("[DynamicLibrary] open attempt: ") + name);
+            LOG_DEBUG(std::string("[DynLibrary] Try     ") + name);
 
 #ifdef _WIN32
 
@@ -355,6 +349,12 @@ DynamicLibrary::~DynamicLibrary()
                     // configuration. See Microsoft guidance on DLL search order hardening.
                     if (handle == nullptr && GLRESOLVER_ALLOW_UNSAFE_DLL_SEARCH != 0)
                     {
+                        static std::once_flag s_warnOnce;
+                        std::call_once(s_warnOnce, []() {
+                            LOG_WARN("[DynLibrary] Unsafe DLL search fallback is enabled (GLRESOLVER_ALLOW_UNSAFE_DLL_SEARCH!=0). "
+                                     "This may consult legacy loader search paths; prefer configuring an explicit library directory.");
+                        });
+
                         handle = tryLoad(name);
                     }
                 }
@@ -367,23 +367,53 @@ DynamicLibrary::~DynamicLibrary()
 
             m_handle = handle;
 
-#else
+#else // #ifdef _WIN32
 
             ::dlerror(); // clear any prior error
             m_handle = ::dlopen(name, RTLD_NOW | RTLD_LOCAL);
 
-#if defined(__APPLE__)
+#ifdef __APPLE__
             // Allow callers to specify an explicit search directory for bundled dylibs
             // (e.g., ANGLE's libEGL.dylib / libGLESv2.dylib inside a macOS app bundle).
             // This is an optional override for deployments where @rpath-based discovery is not sufficient.
             // It is intentionally scoped to macOS to avoid changing loader semantics elsewhere.
             if (m_handle == nullptr)
             {
+                const auto isBareLibraryName = [](const std::string& n) -> bool {
+                    // Only apply GLRESOLVER_DYLIB_DIR to simple file names. If the caller provides an absolute path,
+                    // @rpath/@loader_path, or any path separators, do not prepend a directory.
+                    if (n.empty())
+                    {
+                        return false;
+                    }
+                    if (n.find('/') != std::string::npos || n.find('\\') != std::string::npos)
+                    {
+                        return false;
+                    }
+                    if (n.rfind("@rpath/", 0) == 0 || n.rfind("@loader_path/", 0) == 0 || n.rfind("@executable_path/", 0) == 0)
+                    {
+                        return false;
+                    }
+                    return true;
+                };
+
                 const char* const extraDir = std::getenv("GLRESOLVER_DYLIB_DIR");
                 if (extraDir != nullptr && extraDir[0] != '\0')
                 {
-                    std::string full(extraDir);
-                    LOG_DEBUG(std::string("[DynamicLibrary] using ") + extraDir + " to locate: " + name);
+                    if (!isBareLibraryName(name))
+                    {
+                        LOG_DEBUG(std::string("[DynLibrary] GLRESOLVER_DYLIB_DIR ignored for non-bare name: ") + name);
+                        // Do not attempt directory prepending when the name already encodes a path or @rpath token.
+                        // Fall through to the standard search below.
+                    }
+                    else
+                    {
+                    // Allow whitespace in env var values (common when set in shells or .env files).
+                    std::string baseDir(extraDir);
+                    TrimTrailingWhitespace(baseDir);
+
+                    std::string full(baseDir);
+                    LOG_DEBUG(std::string("[DynLibrary] using GLRESOLVER_DYLIB_DIR=\"") + baseDir + "\" to locate: " + name);
                     if (!full.empty() && full.back() != '/')
                     {
                         full.push_back('/');
@@ -396,20 +426,20 @@ DynamicLibrary::~DynamicLibrary()
                     if (m_handle != nullptr)
                     {
                         m_loadedName = full;
-                        LOG_DEBUG(std::string("[DynamicLibrary] opened: ") + m_loadedName);
+                        LOG_DEBUG(std::string("[DynLibrary] Opened  ") + m_loadedName);
                         return true;
                     }
                 }
             }
 
-#endif
+#endif // #ifdef __APPLE__
 
-#endif
+#endif // #ifdef _WIN32 #else
 
             if (m_handle != nullptr)
             {
                 m_loadedName = name;
-                LOG_DEBUG(std::string("[DynamicLibrary] opened: ") + m_loadedName);
+                LOG_DEBUG(std::string("[DynLibrary] Opened  ") + m_loadedName);
                 return true;
             }
 
@@ -446,7 +476,7 @@ DynamicLibrary::~DynamicLibrary()
                 }
             }
 
-#else
+#else // #ifdef _WIN32
 
         const char* err = ::dlerror();
         if (err != nullptr)
@@ -457,13 +487,13 @@ DynamicLibrary::~DynamicLibrary()
             reason += err;
         }
 
-#endif
+#endif // #ifdef _WIN32
 
         } // for loop
 
         if (!reason.empty())
         {
-            LOG_DEBUG(std::string("[DynamicLibrary] open failed: ") + reason);
+            LOG_DEBUG(std::string("[DynLibrary] Failed  ") + reason);
         }
         return false;
     }
@@ -479,13 +509,9 @@ DynamicLibrary::~DynamicLibrary()
         }
 
 #ifdef _WIN32
-
         ::FreeLibrary(m_handle);
-
 #else
-
         ::dlclose(m_handle);
-
 #endif
 
         m_handle = nullptr;
@@ -506,9 +532,7 @@ DynamicLibrary::~DynamicLibrary()
         }
 
 #ifdef _WIN32
-
         return WinProcToSymbol(::GetProcAddress(m_handle, name));
-
 #else
 
         // clear any prior error
@@ -586,7 +610,7 @@ DynamicLibrary::~DynamicLibrary()
 
         return nullptr;
 
-#else
+#else // #ifdef _WIN32
 
         // clear any prior error
         ::dlerror();
@@ -598,7 +622,7 @@ DynamicLibrary::~DynamicLibrary()
         }
         return sym;
 
-#endif
+#endif // #ifdef _WIN32 #else
 
     }
 

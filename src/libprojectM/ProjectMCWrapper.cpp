@@ -86,7 +86,7 @@ projectm_handle projectm_create_with_opengl_load_proc(void* (*load_proc)(const c
         }
 
         // Check GL requirements and init GLAD (guarded internally, valid to call multiple times)
-        if (!libprojectM::Renderer::Platform::GladLoader::Instance().LoadGlad())
+        if (!libprojectM::Renderer::Platform::GladLoader::Instance().Initialize())
         {
             return nullptr;
         }

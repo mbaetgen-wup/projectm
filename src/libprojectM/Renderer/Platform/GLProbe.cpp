@@ -26,8 +26,10 @@ enum : std::uint16_t
 {
     PM_GL_MAJOR_VERSION        = 0x821B,
     PM_GL_MINOR_VERSION        = 0x821C,
-    PM_GL_CONTEXT_FLAGS        = 0x821E,
-    PM_GL_CONTEXT_PROFILE_MASK = 0x9126
+    PM_GL_CONTEXT_FLAGS        = 0x821E
+#ifndef USE_GLES
+    ,PM_GL_CONTEXT_PROFILE_MASK = 0x9126
+#endif
 };
 
 /**
@@ -93,7 +95,7 @@ auto ResolveGLFunctions(const GLProbe::GLFunctions& handles,
     auto* getError = handles.getError;
     auto* getIntegerv = handles.getIntegerv;
 
-    if ((getString == nullptr || getError == nullptr) && !GLResolver::Instance().IsLoaded())
+    if ((getString == nullptr || getError == nullptr) && !GLResolver::Instance().IsInitialized())
     {
         reason = "GL entrypoints not configured and GLResolver is not loaded";
         return false;
@@ -380,12 +382,16 @@ auto ProfileString(const ResolvedGLFunctions& gl) -> std::string
 
     ClearGlErrors(gl);
 
+#ifdef USE_GLES
+    return "n/a";
+#else
     gl.getIntegerv(PM_GL_CONTEXT_PROFILE_MASK, &mask);
 
     if (gl.getError() != GL_NO_ERROR)
     {
         return "n/a";
     }
+#endif
 
     if ((mask & PM_GL_CONTEXT_CORE_PROFILE_BIT) != 0)
     {

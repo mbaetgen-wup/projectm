@@ -8,18 +8,6 @@
 #include <mutex>
 #include <string>
 
-// GLX fallback for resolving non-extension gl* names via glXGetProcAddress*.
-//
-// Default behavior is conservative: only extension-style names are resolved via
-// glXGetProcAddress*, because some implementations return non-null for unknown
-// symbols which may crash when called.
-//
-// If support for legacy/non-GLVND stacks is required where some core entry points are not
-// exported from libGL/libOpenGL, you may enable this as a last-resort fallback.
-#ifndef GLRESOLVER_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK
-#define GLRESOLVER_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK 0
-#endif
-
 namespace libprojectM
 {
 namespace Renderer
@@ -103,11 +91,21 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *      Default is 1 (enabled). Useful for debugging unusual context switching in host apps.
  *
  *  - GLRESOLVER_MACOS_PREFER_CGL=0
- *      On macOS, prefer EGL when both EGL and CGL appear current. Default is 1 (prefer CGL).
+ *      On macOS, prefer CGL when both EGL and CGL appear current. Default is 1 (prefer CGL).
+ *
+ *  - GLRESOLVER_EGL_ALLOW_CORE_GETPROCADDRESS_FALLBACK=1
+ *      Enable a non-portable fallback that asks eglGetProcAddress() for core (non-extension) "gl*"
+ *      entry points when EGL_KHR_get_all_proc_addresses / EGL_KHR_client_get_all_proc_addresses
+ *      is not advertised. Default is 0 (disabled).
+ *
+ * - GLRESOLVER_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK=1
+ *     Enable GLX fallback for resolving non-extension gl* names via glXGetProcAddress*.
+ *     Disabled by default.
  *
  * - GLRESOLVER_DYLIB_DIR=path
- *     On macOS, allow callers to specify an explicit search directory for bundled dylibs.
- *     Prefer @rpath-based deployment (LC_RPATH / install names) when possible; this is intended as an override.
+ *     macOS-only: if dlopen() fails for a *bare* library name (no path separators and no @rpath/@loader_path tokens),
+ *     retry dlopen() with @p path prepended. This is intended as an escape hatch for app-bundle deployments where
+ *     @rpath-based discovery is not sufficient; prefer LC_RPATH/install-name based deployment when possible.
  *
  * Compile-time switches:
  *
@@ -118,10 +116,6 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *     As a last resort, some applications may still want to fall back to LoadLibrary(name)
  *     (which can consult legacy search paths such as the process current working directory).
  *     This is disabled by default for security hardening.
- *
- * - GLRESOLVER_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK=1
- *     Enable GLX fallback for resolving non-extension gl* names via glXGetProcAddress*.
- *     Disabled by default.
  *
  * - GLRESOLVER_LOADER_DIAGNOSTICS=1
  *     When enabled, the loader prints diagnostics for unusual ABI situations. Default is disabled.
@@ -174,18 +168,18 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *   +-- OpenNativeLibraries()
  *   |     +-- open EGL library
  *   |     |     Windows:  libEGL.dll | EGL.dll
- *   |     |     macOS:    libEGL.dylib | libEGL.1.dylib | EGL
+ *   |     |     macOS:    @rpath/libEGL.dylib | @rpath/libEGL.1.dylib | libEGL.dylib | libEGL.1.dylib | EGL
  *   |     |     Linux:    libEGL.so.1 | libEGL.so
  *   |     |     Android:  libEGL.so
  *   |     +-- open GL library
  *   |     |     Desktop GL build:
  *   |     |       Windows: opengl32.dll
- *   |     |       macOS:   OpenGL.framework/OpenGL
- *   |     |       Linux:   libGL.so.* and/or libOpenGL.so.* (GLVND)
+ *   |     |       macOS:   /System/Library/Frameworks/OpenGL.framework/OpenGL
+ *   |     |       Linux:   libOpenGL.so.* (GLVND) | libGL.so.* (legacy/compat)
  *   |     |     GLES build:
- *   |     |       Windows: libGLESv3.dll/libGLESv2.dll
- *   |     |       macOS:   libGLESv3.dylib/libGLESv2.dylib
- *   |     |       Linux:   libGLESv3.so.* and/or libGLESv2.so.*
+ *   |     |       Windows: libGLESv3.dll | GLESv3.dll | libGLESv2.dll | GLESv2.dll
+ *   |     |       macOS:   @rpath/libGLESv3.dylib | @rpath/libGLESv2.dylib | libGLESv3.dylib | libGLESv2.dylib
+ *   |     |       Linux:   libGLESv3.so.* | libGLESv2.so.*
  *   |     |       Android: libGLESv3.so/libGLESv2.so
  *   |     +-- open GLX library (Linux/Unix)
  *   |           libGLX.so.*
@@ -201,7 +195,7 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *   |
  *   +-- HasCurrentContext()                          (fails if no current context is present)
  *   |
- *   +-- DetectBackend()                              (prefers EGL, then WGL/CGL/GLX depending on platform)
+ *   +-- DetectBackend()                              (prefers EGL when available; macOS: if both EGL and CGL appear current, prefers EGL unless eglGetProcAddress is unavailable and GLRESOLVER_MACOS_PREFER_CGL=1)
  *
  * ## GetProcAddress Flow
  *
@@ -211,11 +205,11 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *   |
  *   +-- User resolver (if any)
  *   |
- *   +-- Provider getProcAddress (backend-aware)
- *   |     EGL  -> eglGetProcAddress (extension-only unless EGL_KHR_*_get_all_proc_addresses)
- *   |     GLX  -> glXGetProcAddress* (glX* and extension-style only)
- *   |     WGL  -> wglGetProcAddress (filters sentinels; may prefer exported symbols)
- *   |     WebGL-> emscripten_webgl*_get_proc_address (Emscripten only)
+ *   +-- Provider getProcAddress (backend-aware; preferred for extensions / GLVND dispatch):
+ *   |     EGL  -> eglGetProcAddress (used for extension-style names unless EGL_KHR_*_get_all_proc_addresses is advertised)
+ *   |     GLX  -> glXGetProcAddress* (used for extension-style names only by default; see GLRESOLVER_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK)
+ *   |     WGL  -> wglGetProcAddress (filters sentinel return values; prefers opengl32.dll exports for core OpenGL 1.1 entry points)
+ *   |     WebGL-> emscripten_webgl*_get_proc_address (Emscripten only; tries WebGL2 first when the current context is >= 2)
  *   |
  *   +-- If Emscripten -> All available lookups have been tried -> Not Found (nullptr)
  *   |
@@ -226,8 +220,9 @@ using UserResolver = void* (*)(const char* name, void* userData);
  *   |     m_glLib.GetSymbol(name)
  *   |     m_glxLib.GetSymbol(name)
  *   |
- *   +-- Late eglGetProcAddress fallback (EGL only)
- *   |        glXGetProcAddress fallback (GLX only, disabled per default)
+ *   +-- Late provider fallbacks (opt-in; for stacks that do not export some core symbols):
+ *   |     EGL  -> eglGetProcAddress(core gl*) when GLRESOLVER_EGL_ALLOW_CORE_GETPROCADDRESS_FALLBACK=1
+ *   |     GLX  -> glXGetProcAddress*(core gl*) when GLRESOLVER_GLX_ALLOW_CORE_GETPROCADDRESS_FALLBACK=1
  *   |
  *  \/
  * Not Found (nullptr)
@@ -275,7 +270,7 @@ public:
     /**
      * @brief Returns true if the resolver was successfully initialized.
      */
-    auto IsLoaded() const -> bool;
+    auto IsInitialized() const -> bool;
 
     /**
      * @brief Returns the backend detected during the last successful Initialize() call.
@@ -310,6 +305,14 @@ public:
      * @return Procedure address or nullptr.
      */
     static auto GetProcAddressThunk(const char* name) -> void*;
+
+    /**
+     * @brief Verify that the resolver is ready to use from the current thread.
+     *
+     * @param reason Return user readable reason.
+     * @return true if the resolver can be used from the current thread.
+     */
+    auto VerifyBeforeUse(std::string& reason) const -> bool;
 
 private:
 
@@ -349,24 +352,25 @@ private:
      */
     struct CurrentContextProbe
     {
-        bool eglLibOpened{false};  //!< True if an EGL library was opened.
-        bool eglAvailable{false};  //!< True if EGL entry points were resolved.
-        bool eglCurrent{false};    //!< True if an EGL context appears current.
+        bool eglLibOpened{false};                   //!< True if an EGL library was opened.
+        bool eglAvailable{false};                   //!< True if EGL entry points were resolved.
+        bool eglCurrent{false};                     //!< True if an EGL context appears current.
+        bool eglGetProcAddressAvailable{false};     //!< True if eglGetProcAddress is available (non-null).
 
-        bool glxLibOpened{false};  //!< True if a GLX library was opened.
-        bool glxAvailable{false};  //!< True if GLX entry points were resolved.
-        bool glxCurrent{false};    //!< True if a GLX context appears current.
+        bool glxLibOpened{false};                   //!< True if a GLX library was opened.
+        bool glxAvailable{false};                   //!< True if GLX entry points were resolved.
+        bool glxCurrent{false};                     //!< True if a GLX context appears current.
 
-        bool wglLibOpened{false};  //!< True if a WGL library was opened.
-        bool wglAvailable{false};  //!< True if WGL entry points were resolved.
-        bool wglCurrent{false};    //!< True if a WGL context appears current.
+        bool wglLibOpened{false};                   //!< True if a WGL library was opened.
+        bool wglAvailable{false};                   //!< True if WGL entry points were resolved.
+        bool wglCurrent{false};                     //!< True if a WGL context appears current.
 
         bool cglLibOpened{false};
-        bool cglAvailable{false};  //!< True if CGL entry points were resolved.
-        bool cglCurrent{false};    //!< True if a CGL context appears current.
+        bool cglAvailable{false};                   //!< True if CGL entry points were resolved.
+        bool cglCurrent{false};                     //!< True if a CGL context appears current.
 
-        bool webglAvailable{false};  //!< True if WebGL entry points were resolved.
-        bool webglCurrent{false};    //!< True if a WebGL context appears current.
+        bool webglAvailable{false};                 //!< True if WebGL entry points were resolved.
+        bool webglCurrent{false};                   //!< True if a WebGL context appears current.
     };
 
     /**
@@ -414,6 +418,7 @@ private:
     static auto HasCurrentContext(const CurrentContextProbe& probe, std::string& outReason) -> bool;
     static auto DetectBackend(const CurrentContextProbe& probe) -> Backend;
     static auto VerifyBackendIsCurrent(Backend backend, const CurrentContextProbe& currentContext) -> bool;
+    static auto VerifyBeforeUse(const ResolverState& state, std::string& reason) -> bool;
     static auto ResolveProcAddress(const ResolverState& state, const char* name) -> void*;
 
     mutable std::mutex m_mutex;                                     //!< Mutex to synchronize initialization and access.

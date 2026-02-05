@@ -65,7 +65,7 @@ auto GladLoader::CheckGLRequirements() -> bool
 
     auto glDetails = glCheck.Check();
 
-    LOG_INFO(std::string("[GladLoader] GL Info: ") +
+    LOG_INFO(std::string("[GladLoader] GLInfo  ") +
                  GLProbe::FormatCompactLine(glDetails.info) +
                  " backend=\"" + BackendToString(GLResolver::Instance().CurrentBackend()) + "\"" +
                  " user_resolver=\"" + (GLResolver::Instance().HasUserResolver() ? "yes" : "no") + "\"");
@@ -82,20 +82,16 @@ auto GladLoader::CheckGLRequirements() -> bool
 }
 
 
-auto GladLoader::LoadGlad() -> bool
+auto GladLoader::Initialize() -> bool
 {
+    // make sure GLResolver is ready to use for this thread
     {
-        std::unique_lock<std::mutex> lock(m_mutex);
-        if (m_isLoaded)
+        std::string reason;
+        if (!GLResolver::Instance().VerifyBeforeUse(reason))
         {
-            return true;
+            LOG_ERROR(std::string("[GladLoader] GLResolver cannot be used: ") + reason);
+            return false;
         }
-    }
-
-    if (!GLResolver::Instance().IsLoaded())
-    {
-        LOG_ERROR(std::string("[GladLoader] Cannot load GLAD: GLResolver is not initialized"));
-        return false;
     }
 
     // Validate context requirements before attempting to load function pointers
@@ -104,18 +100,27 @@ auto GladLoader::LoadGlad() -> bool
         return false;
     }
 
+    // check if GLAD is already initialized
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        if (m_isLoaded)
+        {
+            return true;
+        }
+    }
+
 #ifndef USE_GLES
 
     const int result = gladLoadGL(&GladBridgeGetProcAddressThunk);
     if (result != 0)
     {
-        LOG_DEBUG("[GladLoader] gladLoadGL() succeeded");
+        LOG_DEBUG("[GladLoader] GLAD    gladLoadGL() succeeded");
         std::unique_lock<std::mutex> lock(m_mutex);
         m_isLoaded = true;
         return true;
     }
 
-    LOG_ERROR(std::string("[GladLoader] gladLoadGL() failed (backend=") +
+    LOG_ERROR(std::string("[GladLoader] GLAD    gladLoadGL() failed (backend=") +
               BackendToString(GLResolver::Instance().CurrentBackend()) + ")");
     return false;
 
@@ -124,13 +129,13 @@ auto GladLoader::LoadGlad() -> bool
     const int result = gladLoadGLES2(&GladBridgeGetProcAddressThunk);
     if (result != 0)
     {
-        LOG_DEBUG("[GladLoader] gladLoadGLES2() succeeded");
+        LOG_DEBUG("[GladLoader] GLAD    gladLoadGLES2() succeeded");
         std::unique_lock<std::mutex> lock(m_mutex);
         m_isLoaded = true;
         return true;
     }
 
-    LOG_ERROR(std::string("[GladLoader] gladLoadGLES2() failed (backend=") +
+    LOG_ERROR(std::string("[GladLoader] GLAD    gladLoadGLES2() failed (backend=") +
               BackendToString(GLResolver::Instance().CurrentBackend()) + ")");
 
     return false;

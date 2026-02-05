@@ -33,7 +33,7 @@ public:
      *
      * @return true if GLAD was loaded successfully, or was already loaded.
      */
-    auto LoadGlad() -> bool;
+    auto Initialize() -> bool;
 
 private:
     /**

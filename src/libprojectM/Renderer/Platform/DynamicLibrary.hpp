@@ -8,13 +8,9 @@
 #ifndef __EMSCRIPTEN__
 
 #ifdef _WIN32
-
 #include <windows.h>
-
 #else // #ifdef _WIN32
-
 #include <dlfcn.h>
-
 #endif // #ifdef _WIN32
 
 #endif // #ifndef __EMSCRIPTEN__
@@ -30,13 +26,9 @@
 // This macro is used in our local EGL function pointer typedefs to ensure we
 // call into the provider (ANGLE / driver EGL) using the correct ABI.
 #if defined(_WIN32) && !defined(_WIN64)
-
 #define PLATFORM_EGLAPIENTRY __stdcall
-
 #else
-
 #define PLATFORM_EGLAPIENTRY
-
 #endif
 
 // -------------------------------------------------------------------------
