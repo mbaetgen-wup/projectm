@@ -66,6 +66,7 @@ namespace Platform {
 
 
 namespace {
+
 /**
  * Removes all trailing whitespaces for the given string.
  *
@@ -408,26 +409,27 @@ DynamicLibrary::~DynamicLibrary()
                     }
                     else
                     {
-                    // Allow whitespace in env var values (common when set in shells or .env files).
-                    std::string baseDir(extraDir);
-                    TrimTrailingWhitespace(baseDir);
+                        // Allow whitespace in env var values (common when set in shells or .env files).
+                        std::string baseDir(extraDir);
+                        TrimTrailingWhitespace(baseDir);
 
-                    std::string full(baseDir);
-                    LOG_DEBUG(std::string("[DynLibrary] using GLRESOLVER_DYLIB_DIR=\"") + baseDir + "\" to locate: " + name);
-                    if (!full.empty() && full.back() != '/')
-                    {
-                        full.push_back('/');
-                    }
-                    full += name;
-                    ::dlerror();
+                        std::string full(baseDir);
+                        LOG_DEBUG(std::string("[DynLibrary] using GLRESOLVER_DYLIB_DIR=\"") + baseDir + "\" to locate: " + name);
+                        if (!full.empty() && full.back() != '/')
+                        {
+                            full.push_back('/');
+                        }
+                        full += name;
+                        ::dlerror();
 
-                    m_handle = ::dlopen(full.c_str(), RTLD_NOW | RTLD_LOCAL);
+                        m_handle = ::dlopen(full.c_str(), RTLD_NOW | RTLD_LOCAL);
 
-                    if (m_handle != nullptr)
-                    {
-                        m_loadedName = full;
-                        LOG_DEBUG(std::string("[DynLibrary] Opened  ") + m_loadedName);
-                        return true;
+                        if (m_handle != nullptr)
+                        {
+                            m_loadedName = full;
+                            LOG_DEBUG(std::string("[DynLibrary] Opened  ") + m_loadedName);
+                            return true;
+                        }
                     }
                 }
             }
