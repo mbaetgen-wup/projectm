@@ -470,7 +470,7 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
 
 #ifdef _WIN32
         diag += std::string(" wgl_get_proc=\"") + (state.m_wglGetProcAddress != nullptr ? "yes" : "no") + "\"";
-#elif !defined(__APPLE__) && !defined(__ANDROID__)
+#elif !defined(__APPLE__) && !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
 
         diag += std::string(" glx_get_proc=\"") + (state.m_glxGetProcAddress != nullptr ? "yes" : "no") + "\"";
 
@@ -485,6 +485,8 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
 
 #endif // #ifdef _WIN32
 
+#ifndef __EMSCRIPTEN__
+
         if (AllowEglCoreGetProcAddressFallback())
         {
             diag += " egl_policy=\"ext+fallback\"";
@@ -493,6 +495,8 @@ auto GLResolver::Initialize(UserResolver resolver, void* userData) -> bool
         {
             diag += " egl_policy=\"ext-only\"";
         }
+
+#endif // #ifndef __EMSCRIPTEN__
 
         diag += std::string(" user_resolver=\"") + (state.m_userResolver != nullptr ? "yes" : "no") + "\"";
 
@@ -739,7 +743,9 @@ auto GLResolver::GetProcAddress(const char* name) const -> void*
 
 void GLResolver::OpenNativeLibraries(ResolverState& state)
 {
-#ifndef __EMSCRIPTEN__
+#ifdef __EMSCRIPTEN__
+    (void)state;
+#else
 
     std::string reason;
 
@@ -778,12 +784,14 @@ void GLResolver::OpenNativeLibraries(ResolverState& state)
         LOG_DEBUG(std::string("[GLResolver] Failed to open GL library: ") + reason);
     }
 
-#endif // #ifndef __EMSCRIPTEN__
+#endif // #ifdef __EMSCRIPTEN__ #else
 }
 
 void GLResolver::ResolveProviderFunctions(ResolverState& state)
 {
-#ifndef __EMSCRIPTEN__
+#ifdef __EMSCRIPTEN__
+    (void)state;
+#else
     // EGL
     {
         // Note: eglGetProcAddress is the canonical mechanism for resolving EGL/GLES entry points,
@@ -1064,7 +1072,7 @@ void GLResolver::ResolveProviderFunctions(ResolverState& state)
     LOG_DEBUG(std::string("[GLResolver] GLX     handle=") +
               std::to_string(reinterpret_cast<std::uintptr_t>(state.m_glxLib.Handle())) +
               " lib=\"" + state.m_glxLib.LoadedName() + "\"");
-#endif // #ifndef __EMSCRIPTEN__
+#endif // #ifdef __EMSCRIPTEN__ #else
 }
 
 auto GLResolver::ProbeCurrentContext(const ResolverState& state) -> CurrentContextProbe
@@ -1072,6 +1080,8 @@ auto GLResolver::ProbeCurrentContext(const ResolverState& state) -> CurrentConte
     CurrentContextProbe result;
 
 #ifdef __EMSCRIPTEN__
+
+    (void)state;
 
     result.webglAvailable = true;
 
