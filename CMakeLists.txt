@@ -95,7 +95,11 @@ endif()
 
 # Compiler-/system-dependent options, including dependencies.
 cmake_dependent_option(BUILD_SHARED_LIBS "Build and install libprojectM as a shared libraries. If OFF, builds as static libraries." ON "NOT ENABLE_EMSCRIPTEN" OFF)
-cmake_dependent_option(ENABLE_GLES "Enable OpenGL ES support" OFF "NOT ENABLE_EMSCRIPTEN AND NOT CMAKE_SYSTEM_NAME STREQUAL Android" ON)
+if (ENABLE_EMSCRIPTEN OR CMAKE_SYSTEM_NAME STREQUAL "Android")
+    set(ENABLE_GLES ON CACHE BOOL "Enable OpenGL ES support" FORCE)
+else()
+    option(ENABLE_GLES "Enable OpenGL ES support" OFF)
+endif()
 cmake_dependent_option(ENABLE_INSTALL "Enable installing projectM libraries and headers." OFF "NOT PROJECT_IS_TOP_LEVEL" ON)
 
 # Experimental/unsupported features
