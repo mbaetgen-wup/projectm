@@ -26,6 +26,11 @@ target_link_libraries(projectM-Test-UI
         glad
         )
 
+target_compile_definitions(projectM-Test-UI
+        PUBLIC
+        $<$<BOOL:ENABLE_GLES>:USE_GLES>
+        )
+
 if(MSVC)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.16")
         set_target_properties(projectM-Test-UI

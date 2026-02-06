@@ -118,3 +118,9 @@ else()
             PROJECTM_CXX_STATIC_DEFINE
             )
 endif()
+
+
+target_compile_definitions(Renderer
+        PUBLIC
+        $<$<BOOL:ENABLE_GLES>:USE_GLES>
+        )
