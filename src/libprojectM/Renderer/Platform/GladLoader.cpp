@@ -94,7 +94,7 @@ auto GladLoader::Initialize() -> bool
         }
     }
 
-    // Validate context requirements before attempting to load function pointers
+    // Validate context requirements
     if (!CheckGLRequirements())
     {
         return false;
@@ -114,7 +114,10 @@ auto GladLoader::Initialize() -> bool
     const int result = gladLoadGL(&GladBridgeGetProcAddressThunk);
     if (result != 0)
     {
-        LOG_DEBUG("[GladLoader] GLAD    gladLoadGL() succeeded");
+        if (EnableGLResolverTraceLogging())
+        {
+            LOG_INFO("[GladLoader] GLAD    gladLoadGL() succeeded");
+        }
         std::unique_lock<std::mutex> lock(m_mutex);
         m_isLoaded = true;
         return true;
@@ -129,7 +132,10 @@ auto GladLoader::Initialize() -> bool
     const int result = gladLoadGLES2(&GladBridgeGetProcAddressThunk);
     if (result != 0)
     {
-        LOG_DEBUG("[GladLoader] GLAD    gladLoadGLES2() succeeded");
+        if (EnableGLResolverTraceLogging())
+        {
+            LOG_INFO("[GladLoader] GLAD    gladLoadGLES2() succeeded");
+        }
         std::unique_lock<std::mutex> lock(m_mutex);
         m_isLoaded = true;
         return true;
