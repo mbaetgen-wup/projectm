@@ -1,5 +1,6 @@
 
 #include "GLResolver.hpp"
+#include "PlaformLibraryNames.hpp"
 
 #include <Logging.hpp>
 

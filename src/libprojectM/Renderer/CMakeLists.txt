@@ -67,7 +67,11 @@ add_library(Renderer OBJECT
         VertexBufferUsage.hpp
         VertexIndexArray.cpp
         VertexIndexArray.hpp
-        )
+        Platform/DynamicLibrary_win32.cpp
+        Platform/DynamicLibrary_posix.cpp
+        Platform/DynamicLibrary_emscripten.cpp
+        Platform/PlaformLibraryNames.hpp
+)
 
 target_include_directories(Renderer
         PRIVATE

@@ -1,20 +1,10 @@
 #pragma once
 
-#include <array>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <type_traits>
-
-#ifndef __EMSCRIPTEN__
-
-#ifdef _WIN32
-#include <windows.h>
-#else // #ifdef _WIN32
-#include <dlfcn.h>
-#endif // #ifdef _WIN32
-
-#endif // #ifndef __EMSCRIPTEN__
 
 // -------------------------------------------------------------------------
 // Minimal EGL calling-convention support
@@ -49,128 +39,12 @@ namespace Platform {
 
 /**
  * @brief Platform library handle type.
+ *
+ * On all platforms, the handle is represented as void* in the public API.
+ * On Windows, the underlying HMODULE is a typedef for a pointer type and
+ * is safely convertible to/from void* without loss.
  */
-#ifdef _WIN32
-using LibHandle = HMODULE;
-#else
 using LibHandle = void*;
-#endif
-
-#ifdef _WIN32
-
-// Windows GL/EGL library name candidates
-
-constexpr std::array<const char*, 3> kNativeEglNames = {
-    "libEGL.dll",
-    "EGL.dll",
-    nullptr};
-
-constexpr std::array<const char*, 2> kNativeGlNames = {
-    "opengl32.dll",
-    nullptr};
-
-constexpr std::array<const char*, 5> kNativeGlesNames = {
-    "libGLESv3.dll",
-    "GLESv3.dll",
-    "libGLESv2.dll",
-    "GLESv2.dll",
-    nullptr};
-
-/**
- * EGL names for global module lookup.
- */
-static constexpr std::array<const char*, 6> kAllEglModuleNames = {
-    "libEGL.dll",
-    "EGL.dll",
-    "libGLESv2.dll",
-    "GLESv2.dll",
-    "libGLESv3.dll",
-    "GLESv3.dll"};
-
-#elif defined(__APPLE__)
-
-// macOS GL/EGL library name candidates
-// macOS native OpenGL uses CGL (OpenGL.framework). ANGLE (and other portability layers).
-// commonly provide EGL/GLES dylibs in the application bundle / @rpath.
-
-constexpr std::array<const char*, 6> kNativeEglNames = {
-    "@rpath/libEGL.dylib",
-    "@rpath/libEGL.1.dylib",
-    "libEGL.dylib",
-    "libEGL.1.dylib",
-    "EGL",
-    nullptr};
-
-constexpr std::array<const char*, 2> kNativeGlNames = {
-    "/System/Library/Frameworks/OpenGL.framework/OpenGL",
-    nullptr};
-
-constexpr std::array<const char*, 7> kNativeGlesNames = {
-    "@rpath/libGLESv3.dylib",
-    "@rpath/libGLESv2.dylib",
-    "@rpath/libGLESv2_with_capture.dylib",
-    "libGLESv3.dylib",
-    "libGLESv2.dylib",
-    "libGLESv2_with_capture.dylib",
-    nullptr};
-
-#elif defined(__ANDROID__)
-
-// Android EGL + GLES (no desktop libGL / GLX) library name candidates
-
-constexpr std::array<const char*, 2> kNativeEglNames = {
-    "libEGL.so",
-    nullptr};
-
-constexpr std::array<const char*, 3> kNativeGlesNames = {
-    "libGLESv3.so",
-    "libGLESv2.so",
-    nullptr};
-
-#else // #ifdef _WIN32
-
-// Unix GL/EGL library name candidates
-
-constexpr std::array<const char*, 3> kNativeEglNames = {
-    "libEGL.so.1",
-    "libEGL.so",
-    nullptr};
-
-/**
- * Linux / GLES:
- * Prefer libGLESv3/libGLESv2 sonames. Core GLES entry points are expected
- * to be available as library exports. eglGetProcAddress is not guaranteed
- * to return core symbols unless EGL_KHR_get_all_proc_addresses (or its
- * client variant) is advertised.
- */
-constexpr std::array<const char*, 6> kNativeGlesNames = {
-    "libGLESv3.so.3",
-    "libGLESv3.so",
-    "libGLESv2.so.2",
-    "libGLESv2.so.1",
-    "libGLESv2.so",
-    nullptr};
-
-/**
- * Linux / GLVND note:
- * Many modern distributions use GLVND, which splits OpenGL entry points (libOpenGL) from
- * window-system glue such as GLX (libGLX). Prefer GLVND-facing libs first, but keep legacy
- * libGL names in the candidate list for compatibility with older or non-GLVND stacks.
- */
-constexpr std::array<const char*, 6> kNativeGlNames = {
-    "libOpenGL.so.1", // GLVND OpenGL dispatcher (core gl* entry points)
-    "libOpenGL.so.0", // older GLVND soname
-    "libGL.so.1",     // legacy/compat umbrella (often provided by GLVND)
-    "libGL.so.0",     // sometimes shipped as .so.0
-    "libGL.so",
-    nullptr};
-
-constexpr std::array<const char*, 3> kNativeGlxNames = {
-    "libGLX.so.1", // GLVND GLX dispatcher (glXGetProcAddress*)
-    "libGLX.so.0", // older GLVND soname
-    nullptr};
-
-#endif // #ifdef _WIN32
 
 #if GLRESOLVER_LOADER_DIAGNOSTICS
 
@@ -326,97 +200,6 @@ auto EnvFlagEnabled(const char* name, bool defaultValue) -> bool;
  * @return true if trace logging is enabled.
  */
 auto EnableGLResolverTraceLogging() -> bool;
-
-#ifdef _WIN32
-
-/**
- * @brief Converts a Windows FARPROC into the generic symbol representation (void*) .
- *
- * Windows GetProcAddress returns a function pointer type (FARPROC). To avoid relying on a direct
- * reinterpret_cast between function pointers and object pointers, this helper copies the bit pattern
- * into a void* storage location when the sizes match.
- */
-inline auto WinProcToSymbol(FARPROC proc) noexcept -> void*
-{
-    if (proc == nullptr)
-    {
-        return nullptr;
-    }
-
-    if (sizeof(proc) != sizeof(void*))
-    {
-        return nullptr;
-    }
-
-    void* sym = nullptr;
-    std::memcpy(&sym, &proc, sizeof(void*));
-    return sym;
-}
-
-#endif
-
-#ifdef __EMSCRIPTEN__
-
-// -------------------------------------------------------------------------
-// Emscripten stub implementation
-// -------------------------------------------------------------------------
-class DynamicLibrary
-{
-public:
-    DynamicLibrary() = default;
-    ~DynamicLibrary() = default;
-
-    DynamicLibrary(const DynamicLibrary&) = delete;
-    DynamicLibrary& operator=(const DynamicLibrary&) = delete;
-
-    DynamicLibrary(DynamicLibrary&&) noexcept = default;
-    DynamicLibrary& operator=(DynamicLibrary&&) noexcept = default;
-
-    inline auto Open(const char* const*, std::string&) -> bool
-    {
-        return false;
-    }
-
-    inline auto Close() -> void
-    {
-    }
-
-    inline auto IsOpen() const -> bool
-    {
-        return false;
-    }
-
-    inline auto GetSymbol(const char*) const -> void*
-    {
-        return nullptr;
-    }
-
-    inline auto LoadedName() const -> const std::string&
-    {
-        static const std::string empty;
-        return empty;
-    }
-
-    inline auto Handle() const -> void*
-    {
-        return nullptr;
-    }
-
-    inline auto SetCloseOnDestruct(bool) -> void
-    {
-    }
-
-    static inline auto FindGlobalSymbol(const char*) -> void*
-    {
-        return nullptr;
-    }
-};
-
-#else // #ifdef __EMSCRIPTEN__
-
-// -------------------------------------------------------------------------
-// Native implementation (Windows / POSIX)
-// -------------------------------------------------------------------------
 
 /**
  * @brief Wrapper around a dynamic library handle. Once opened, the library needs to be closed by calling Close() if needed, it is not closed automatically by destruction.
@@ -665,8 +448,6 @@ auto GetProcAddressFromLibrariesFallback(const DynamicLibrary& lib1, const Dynam
     }
     return nullptr;
 }
-
-#endif // #ifdef __EMSCRIPTEN__ #else
 
 } // namespace Platform
 } // namespace Renderer
