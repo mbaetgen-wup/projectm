@@ -47,8 +47,8 @@ auto GladLoader::CheckGLRequirements() -> bool
 
     glCheck
         .WithApi(GLApi::OpenGLES)
-        .WithMinimumVersion(3, 2)
-        .WithMinimumShaderLanguageVersion(3, 20)
+        .WithMinimumVersion(3, 1)
+        .WithMinimumShaderLanguageVersion(3, 0)
         .WithRequireCoreProfile(false);
 
 #else

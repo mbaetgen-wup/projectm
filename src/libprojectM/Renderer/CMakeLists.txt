@@ -70,7 +70,7 @@ add_library(Renderer OBJECT
         Platform/DynamicLibrary_win32.cpp
         Platform/DynamicLibrary_posix.cpp
         Platform/DynamicLibrary_emscripten.cpp
-        Platform/PlaformLibraryNames.hpp
+        Platform/PlatformLibraryNames.hpp
 )
 
 target_include_directories(Renderer

@@ -6,7 +6,6 @@
 #include "Logging.hpp"
 
 #include <array>
-#include <cstddef>
 #include <cstring>
 #include <mutex>
 #include <string>

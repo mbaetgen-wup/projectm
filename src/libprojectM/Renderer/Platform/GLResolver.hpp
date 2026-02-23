@@ -8,6 +8,10 @@
 #include <mutex>
 #include <string>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace libprojectM {
 namespace Renderer {
 namespace Platform {
