@@ -27,6 +27,9 @@
 
 #include <Logging.hpp>
 
+#include <chrono>
+#include <thread>
+
 namespace libprojectM {
 namespace MilkdropPreset {
 
@@ -55,15 +58,15 @@ MilkdropPreset::MilkdropPreset(std::istream& presetData)
 
 void MilkdropPreset::Initialize(const Renderer::RenderContext& renderContext)
 {
+    // Monolithic path: run all initialization synchronously.
+    // Phase 0: setup.
     assert(renderContext.textureManager);
     m_state.renderContext = renderContext;
     m_state.blurTexture.Initialize(renderContext);
     m_state.LoadShaders();
 
-    // Initialize variables and code now we have a proper render state.
     CompileCodeAndRunInitExpressions();
 
-    // Update framebuffer and texture sizes if needed
     m_framebuffer.SetSize(renderContext.viewportSizeX, renderContext.viewportSizeY);
     m_motionVectorUVMap->SetSize(renderContext.viewportSizeX, renderContext.viewportSizeY);
     if (m_state.mainTexture.expired())
@@ -71,8 +74,72 @@ void MilkdropPreset::Initialize(const Renderer::RenderContext& renderContext)
         m_state.mainTexture = m_framebuffer.GetColorAttachmentTexture(1, 0);
     }
 
+    // Use synchronous compilation — no async submit/poll/finalize dance.
     m_perPixelMesh.CompileWarpShader(m_state);
     m_finalComposite.CompileCompositeShader(m_state);
+
+    SetInitialized();
+}
+
+void MilkdropPreset::InitializePhase(const Renderer::RenderContext& renderContext, int phase)
+{
+    switch (phase)
+    {
+        case 0:
+        {
+            // Setup: render context, blur textures, static shaders,
+            // expression compilation, framebuffer allocation.
+            assert(renderContext.textureManager);
+            m_state.renderContext = renderContext;
+            m_state.blurTexture.Initialize(renderContext);
+            m_state.LoadShaders();
+
+            CompileCodeAndRunInitExpressions();
+
+            m_framebuffer.SetSize(renderContext.viewportSizeX, renderContext.viewportSizeY);
+            m_motionVectorUVMap->SetSize(renderContext.viewportSizeX, renderContext.viewportSizeY);
+            if (m_state.mainTexture.expired())
+            {
+                m_state.mainTexture = m_framebuffer.GetColorAttachmentTexture(1, 0);
+            }
+            break;
+        }
+        case 1:
+            // Submit BOTH shaders for async compilation in the same frame.
+            // With GL_KHR_parallel_shader_compile the driver compiles them
+            // in parallel on background threads.  Without the extension,
+            // SubmitCompileAsync falls back to synchronous compilation.
+            m_perPixelMesh.CompileWarpShaderAsync(m_state);
+            m_finalComposite.CompileCompositeShaderAsync(m_state);
+            break;
+
+        case 2:
+            // Finalize compilation — check results and clean up.
+            // StageGlWork has already polled IsPhaseComplete(1) until both
+            // shaders reported GL_COMPLETION_STATUS_KHR == GL_TRUE.
+            m_perPixelMesh.FinalizeWarpShaderCompile();
+            m_finalComposite.FinalizeCompositeShaderCompile();
+            SetInitialized();
+            break;
+
+        default:
+            break;
+    }
+}
+
+bool MilkdropPreset::IsPhaseComplete(int phase) const
+{
+    switch (phase)
+    {
+        case 1:
+            // Phase 1 submitted async shader compiles.
+            // Poll completion status without blocking.
+            return m_perPixelMesh.IsWarpShaderCompileComplete()
+                && m_finalComposite.IsCompositeShaderCompileComplete();
+
+        default:
+            return true;
+    }
 }
 
 void MilkdropPreset::RenderFrame(const libprojectM::Audio::FrameAudioData& audioData, const Renderer::RenderContext& renderContext)
@@ -298,6 +365,12 @@ void MilkdropPreset::LoadShaderCode()
 {
     m_perPixelMesh.LoadWarpShader(m_state);
     m_finalComposite.LoadCompositeShader(m_state);
+
+    // Pre-transpile shaders from HLSL to GLSL now (CPU-only work).
+    // This avoids a stall on the render thread later during Initialize()
+    // when CompileWarpShader/CompileCompositeShader are called.
+    m_perPixelMesh.TranspileWarpShader();
+    m_finalComposite.TranspileCompositeShader();
 }
 
 auto MilkdropPreset::ParseFilename(const std::string& filename) -> std::string

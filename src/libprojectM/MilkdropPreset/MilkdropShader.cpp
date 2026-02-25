@@ -57,6 +57,130 @@ void MilkdropShader::LoadCode(const std::string& presetShaderCode)
     PreprocessPresetShader(m_preprocessedCode);
 }
 
+void MilkdropShader::GenerateStubDeclarations(std::set<std::string>& samplerDeclarations,
+                                               std::set<std::string>& texSizeDeclarations) const
+{
+    // Known 3D noise volume texture names.
+    static const std::set<std::string> noiseVolumeNames = {"noisevol_lq", "noisevol_hq"};
+
+    for (const auto& name : m_samplerNames)
+    {
+        std::string baseName = name;
+        if (name.length() > 3 && name.at(2) == '_')
+        {
+            baseName = name.substr(3);
+        }
+
+        std::string lowerCaseName = Utils::ToLower(baseName);
+
+        // Blur textures only need a sampler, no texsize.
+        if (lowerCaseName == "blur1" || lowerCaseName == "blur2" || lowerCaseName == "blur3")
+        {
+            samplerDeclarations.insert("uniform sampler2D sampler_" + name + ";\n");
+            continue;
+        }
+
+        // Determine if this is a 3D texture.
+        bool is3D = (noiseVolumeNames.count(lowerCaseName) > 0);
+        std::string samplerType = is3D ? "sampler3D" : "sampler2D";
+
+        samplerDeclarations.insert("uniform " + samplerType + " sampler_" + name + ";\n");
+
+        // Add short sampler alias for prefixed random textures.
+        if (name.length() > 7 && name.substr(0, 4) == "rand" && name.at(6) == '_')
+        {
+            samplerDeclarations.insert("uniform sampler2D sampler_" + name.substr(0, 6) + ";\n");
+        }
+
+        // texsize declaration — skip "main" as it uses its own path, and skip blur textures.
+        if (lowerCaseName != "main")
+        {
+            texSizeDeclarations.insert("uniform float4 texsize_" + baseName + ";\n");
+
+            if (baseName.length() > 7 && baseName.substr(0, 4) == "rand" && baseName.at(6) == '_')
+            {
+                texSizeDeclarations.insert("uniform float4 texsize_" + baseName.substr(0, 6) + ";\n");
+            }
+        }
+        else
+        {
+            texSizeDeclarations.insert("uniform float4 texsize_main;\n");
+        }
+    }
+}
+
+void MilkdropShader::TranspilePresetCode()
+{
+    std::string shaderTypeString = (m_type == ShaderType::WarpShader) ? "warp" : "composite";
+
+    // Work on a copy of the preprocessed code.
+    std::string program = m_preprocessedCode;
+
+    M4::GLSLGenerator generator;
+    M4::Allocator allocator;
+
+    M4::HLSLTree tree(&allocator);
+    M4::HLSLParser parser(&allocator, &tree);
+
+    // Preprocess define macros
+    std::string sourcePreprocessed;
+    if (!parser.ApplyPreprocessor("", program.c_str(), program.size(), sourcePreprocessed))
+    {
+        LOG_DEBUG("[MilkdropShader] Failed " + shaderTypeString + " shader code:\n" + program);
+        throw Renderer::ShaderException("Error translating HLSL " + shaderTypeString + " shader: Preprocessing failed.");
+    }
+
+    // Remove previous shader declarations
+    std::smatch matches;
+    while (std::regex_search(sourcePreprocessed, matches, std::regex("sampler(2D|3D|)(\\s+|\\().*")))
+    {
+        sourcePreprocessed.replace(matches.position(), matches.length(), "");
+    }
+
+    // Remove previous texsize declarations
+    while (std::regex_search(sourcePreprocessed, matches, std::regex("float4\\s+texsize_.*")))
+    {
+        sourcePreprocessed.replace(matches.position(), matches.length(), "");
+    }
+
+    // Generate stub declarations from sampler names — no GL or texture objects needed.
+    std::set<std::string> samplerDeclarations;
+    std::set<std::string> texSizeDeclarations;
+    GenerateStubDeclarations(samplerDeclarations, texSizeDeclarations);
+
+    // Insert declarations at the top.
+    for (const auto& texSizeDeclaration : texSizeDeclarations)
+    {
+        sourcePreprocessed.insert(0, texSizeDeclaration);
+    }
+    for (const auto& samplerDeclaration : samplerDeclarations)
+    {
+        sourcePreprocessed.insert(0, samplerDeclaration);
+    }
+
+    // Parse HLSL into a tree
+    if (!parser.Parse("", sourcePreprocessed.c_str(), sourcePreprocessed.size()))
+    {
+        LOG_DEBUG("[MilkdropShader] Failed " + shaderTypeString + " shader code:\n" + program);
+        LOG_DEBUG("[MilkdropShader] Failed preprocessed " + shaderTypeString + " shader code:\n" + sourcePreprocessed);
+        throw Renderer::ShaderException("[MilkdropShader] Error translating HLSL " + shaderTypeString + " shader: HLSL parsing failed.");
+    }
+
+    // Generate GLSL from the parser tree
+    if (!generator.Generate(&tree, M4::GLSLGenerator::Target_FragmentShader,
+                            MilkdropStaticShaders::Get()->GetGlslGeneratorVersion(),
+                            "PS", M4::GLSLGenerator::Options(M4::GLSLGenerator::Flag_AlternateNanPropagation)))
+    {
+        LOG_DEBUG("[MilkdropShader] Failed " + shaderTypeString + " shader code:\n" + program);
+        LOG_DEBUG("[MilkdropShader] Failed preprocessed " + shaderTypeString + " shader code:\n" + sourcePreprocessed);
+        throw Renderer::ShaderException("[MilkdropShader] Error translating HLSL " + shaderTypeString + " shader: GLSL generating failed.\nSource:\n" + sourcePreprocessed);
+    }
+
+    LOG_TRACE("[MilkdropShader] Pre-transpiled GLSL " + shaderTypeString + " shader code:\n" + std::string(generator.GetResult()));
+
+    m_transpiledFragmentShader = generator.GetResult();
+}
+
 void MilkdropShader::LoadTexturesAndCompile(PresetState& presetState)
 {
     std::locale loc;
@@ -145,6 +269,96 @@ void MilkdropShader::LoadTexturesAndCompile(PresetState& presetState)
 
     // Update blur texture level if shader was compiled successfully.
     presetState.blurTexture.SetRequiredBlurLevel(m_maxBlurLevelRequired);
+}
+
+void MilkdropShader::LoadTexturesAndCompileAsync(PresetState& presetState)
+{
+    std::locale loc;
+
+    // Resolve textures — identical to LoadTexturesAndCompile.
+    for (const auto& name : m_samplerNames)
+    {
+        std::string baseName = name;
+        if (name.length() > 3 && name.at(2) == '_')
+        {
+            baseName = name.substr(3);
+        }
+
+        std::string lowerCaseName = Utils::ToLower(baseName);
+
+        // The "main" and "blurX" textures are preset-specific and are not managed by TextureManager.
+        if (lowerCaseName == "main")
+        {
+            Renderer::TextureSamplerDescriptor desc(presetState.mainTexture.lock(),
+                                                    presetState.renderContext.textureManager->GetSampler(name),
+                                                    name,
+                                                    "main");
+            m_mainTextureDescriptors.push_back(std::move(desc));
+            continue;
+        }
+
+        // A few presets directly use the (undocumented) sampler name.
+        if (lowerCaseName == "blur1")
+        {
+            UpdateMaxBlurLevel(BlurTexture::BlurLevel::Blur1);
+            continue;
+        }
+        if (lowerCaseName == "blur2")
+        {
+            UpdateMaxBlurLevel(BlurTexture::BlurLevel::Blur2);
+            continue;
+        }
+        if (lowerCaseName == "blur3")
+        {
+            UpdateMaxBlurLevel(BlurTexture::BlurLevel::Blur3);
+            continue;
+        }
+
+        // "randNN" textures are cached per preset.
+        if (lowerCaseName.substr(0, 4) == "rand" && lowerCaseName.size() == 6 && std::isdigit(lowerCaseName[4], loc) && std::isdigit(lowerCaseName[5], loc))
+        {
+            int randomSlot = std::stoi(lowerCaseName.substr(4));
+            if (randomSlot >= 0 && randomSlot <= 15)
+            {
+                auto it = presetState.randomTextureDescriptors.find(randomSlot);
+                if (it != presetState.randomTextureDescriptors.end())
+                {
+                    m_textureSamplerDescriptors.push_back(it->second);
+                    continue;
+                }
+
+                // Slot empty, request a new random texture.
+                auto desc = presetState.renderContext.textureManager->GetRandomTexture(name);
+
+                // Also store a copy in preset state!
+                presetState.randomTextureDescriptors.insert({randomSlot, desc});
+
+                m_textureSamplerDescriptors.push_back(std::move(desc));
+                continue;
+            }
+
+            // Fall through if slot number is out of range and treat as normal texture.
+        }
+
+        auto desc = presetState.renderContext.textureManager->GetTexture(name);
+        m_textureSamplerDescriptors.push_back(std::move(desc));
+    }
+
+    // Transpile + submit async compile (non-blocking with extension).
+    TranspileHLSLShaderAsync(presetState, m_preprocessedCode);
+
+    // Update blur texture level.
+    presetState.blurTexture.SetRequiredBlurLevel(m_maxBlurLevelRequired);
+}
+
+auto MilkdropShader::IsCompileComplete() const -> bool
+{
+    return m_shader.IsCompileComplete();
+}
+
+void MilkdropShader::FinalizeCompile()
+{
+    m_shader.FinalizeCompile();
 }
 
 void MilkdropShader::LoadVariables(const PresetState& presetState, const PerFrameContext& perFrameContext)
@@ -589,6 +803,27 @@ void MilkdropShader::TranspileHLSLShader(const PresetState& presetState, std::st
         shaderTypeString = "warp";
     }
 
+    // If TranspilePresetCode() was called earlier, we already have the GLSL.
+    // Skip the expensive CPU transpilation and go straight to GL compilation.
+    if (!m_transpiledFragmentShader.empty())
+    {
+        LOG_TRACE("[MilkdropShader] Using pre-transpiled GLSL " + shaderTypeString + " shader.");
+
+        if (m_type == ShaderType::WarpShader)
+        {
+            m_shader.CompileProgram(MilkdropStaticShaders::Get()->GetPresetWarpVertexShader(), m_transpiledFragmentShader);
+        }
+        else
+        {
+            m_shader.CompileProgram(MilkdropStaticShaders::Get()->GetPresetCompVertexShader(), m_transpiledFragmentShader);
+        }
+
+        // Clear the cached source — it's no longer needed.
+        std::string().swap(m_transpiledFragmentShader);
+        return;
+    }
+
+    // Fallback: full transpilation + compilation inline (original path).
     M4::GLSLGenerator generator;
     M4::Allocator allocator;
 
@@ -679,6 +914,111 @@ void MilkdropShader::TranspileHLSLShader(const PresetState& presetState, std::st
     else
     {
         m_shader.CompileProgram(MilkdropStaticShaders::Get()->GetPresetCompVertexShader(), generator.GetResult());
+    }
+}
+
+void MilkdropShader::TranspileHLSLShaderAsync(const PresetState& presetState, std::string& program)
+{
+    std::string shaderTypeString = "composite";
+    if (m_type == ShaderType::WarpShader)
+    {
+        shaderTypeString = "warp";
+    }
+
+    // If TranspilePresetCode() was called earlier, we already have the GLSL.
+    if (!m_transpiledFragmentShader.empty())
+    {
+        LOG_TRACE("[MilkdropShader] Async: using pre-transpiled GLSL " + shaderTypeString + " shader.");
+
+        if (m_type == ShaderType::WarpShader)
+        {
+            m_shader.SubmitCompileAsync(MilkdropStaticShaders::Get()->GetPresetWarpVertexShader(), m_transpiledFragmentShader);
+        }
+        else
+        {
+            m_shader.SubmitCompileAsync(MilkdropStaticShaders::Get()->GetPresetCompVertexShader(), m_transpiledFragmentShader);
+        }
+
+        std::string().swap(m_transpiledFragmentShader);
+        return;
+    }
+
+    // Fallback: full transpilation inline, then async compile.
+    M4::GLSLGenerator generator;
+    M4::Allocator allocator;
+
+    M4::HLSLTree tree(&allocator);
+    M4::HLSLParser parser(&allocator, &tree);
+
+    std::string sourcePreprocessed;
+    if (!parser.ApplyPreprocessor("", program.c_str(), program.size(), sourcePreprocessed))
+    {
+        LOG_DEBUG("[MilkdropShader] Failed " + shaderTypeString + " shader code:\n" + program);
+        throw Renderer::ShaderException("Error translating HLSL " + shaderTypeString + " shader: Preprocessing failed.");
+    }
+
+    std::smatch matches;
+    while (std::regex_search(sourcePreprocessed, matches, std::regex("sampler(2D|3D|)(\\s+|\\().*")))
+    {
+        sourcePreprocessed.replace(matches.position(), matches.length(), "");
+    }
+
+    while (std::regex_search(sourcePreprocessed, matches, std::regex("float4\\s+texsize_.*")))
+    {
+        sourcePreprocessed.replace(matches.position(), matches.length(), "");
+    }
+
+    std::set<std::string> samplerDeclarations;
+    std::set<std::string> texSizeDeclarations;
+    for (const auto& desc : m_mainTextureDescriptors)
+    {
+        samplerDeclarations.insert(desc.SamplerDeclaration());
+        texSizeDeclarations.insert(desc.TexSizeDeclaration());
+    }
+    for (const auto& desc : presetState.blurTexture.GetDescriptorsForBlurLevel(m_maxBlurLevelRequired))
+    {
+        samplerDeclarations.insert(desc.SamplerDeclaration());
+    }
+    for (const auto& desc : m_textureSamplerDescriptors)
+    {
+        samplerDeclarations.insert(desc.SamplerDeclaration());
+        texSizeDeclarations.insert(desc.TexSizeDeclaration());
+    }
+
+    for (const auto& texSizeDeclaration : texSizeDeclarations)
+    {
+        sourcePreprocessed.insert(0, texSizeDeclaration);
+    }
+    for (const auto& samplerDeclaration : samplerDeclarations)
+    {
+        sourcePreprocessed.insert(0, samplerDeclaration);
+    }
+
+    if (!parser.Parse("", sourcePreprocessed.c_str(), sourcePreprocessed.size()))
+    {
+        LOG_DEBUG("[MilkdropShader] Failed " + shaderTypeString + " shader code:\n" + program);
+        LOG_DEBUG("[MilkdropShader] Failed preprocessed " + shaderTypeString + " shader code:\n" + sourcePreprocessed);
+        throw Renderer::ShaderException("[MilkdropShader] Error translating HLSL " + shaderTypeString + " shader: HLSL parsing failed.");
+    }
+
+    if (!generator.Generate(&tree, M4::GLSLGenerator::Target_FragmentShader,
+                            MilkdropStaticShaders::Get()->GetGlslGeneratorVersion(),
+                            "PS", M4::GLSLGenerator::Options(M4::GLSLGenerator::Flag_AlternateNanPropagation)))
+    {
+        LOG_DEBUG("[MilkdropShader] Failed " + shaderTypeString + " shader code:\n" + program);
+        LOG_DEBUG("[MilkdropShader] Failed preprocessed " + shaderTypeString + " shader code:\n" + sourcePreprocessed);
+        throw Renderer::ShaderException("[MilkdropShader] Error translating HLSL " + shaderTypeString + " shader: GLSL generating failed.\nSource:\n" + sourcePreprocessed);
+    }
+
+    LOG_TRACE("[MilkdropShader] Transpiled GLSL " + shaderTypeString + " shader code:\n" + std::string(generator.GetResult()));
+
+    if (m_type == ShaderType::WarpShader)
+    {
+        m_shader.SubmitCompileAsync(MilkdropStaticShaders::Get()->GetPresetWarpVertexShader(), generator.GetResult());
+    }
+    else
+    {
+        m_shader.SubmitCompileAsync(MilkdropStaticShaders::Get()->GetPresetCompVertexShader(), generator.GetResult());
     }
 }
 

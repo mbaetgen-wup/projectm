@@ -26,10 +26,36 @@ public:
     void LoadCompositeShader(const PresetState& presetState);
 
     /**
+     * @brief Pre-transpiles the composite shader from HLSL to GLSL (CPU only, no GL).
+     *
+     * Must be called after LoadCompositeShader().  If called, the subsequent
+     * CompileCompositeShader() will skip the expensive transpilation step.
+     */
+    void TranspileCompositeShader();
+
+    /**
      * @brief Loads the required textures and compiles the composite shader.
      * @param presetState The preset state to retrieve the configuration values from.
      */
     void CompileCompositeShader(PresetState& presetState);
+
+    /**
+     * @brief Loads textures and submits the composite shader for async compilation.
+     * @param presetState The preset state to retrieve the configuration values from.
+     */
+    void CompileCompositeShaderAsync(PresetState& presetState);
+
+    /**
+     * @brief Polls whether an async composite shader compile is complete.
+     * @return true if no async compile is in flight or if it has finished.
+     */
+    auto IsCompositeShaderCompileComplete() const -> bool;
+
+    /**
+     * @brief Finalizes an async composite shader compile.
+     * @throws ShaderException if compilation or linking failed.
+     */
+    void FinalizeCompositeShaderCompile();
 
     /**
      * @brief Renders the composite quad with the appropriate effects or shaders.

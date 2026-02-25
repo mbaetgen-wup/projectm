@@ -22,6 +22,60 @@ public:
     virtual void Initialize(const Renderer::RenderContext& renderContext) = 0;
 
     /**
+     * @brief Phased initialization for spreading GL work across frames.
+     *
+     * Returns the total number of phases.  The caller should call
+     * InitializePhase(renderContext, 0), then InitializePhase(renderContext, 1),
+     * etc., each on a separate frame, until phase == PhaseCount().
+     *
+     * The default implementation calls Initialize() in phase 0.
+     */
+    virtual int InitializePhaseCount() const { return 1; }
+
+    /**
+     * @brief Executes a single initialization phase.
+     * @param renderContext A render context with the initial data.
+     * @param phase The phase index (0-based).
+     */
+    virtual void InitializePhase(const Renderer::RenderContext& renderContext, int phase)
+    {
+        if (phase == 0)
+        {
+            Initialize(renderContext);
+        }
+    }
+
+    /**
+     * @brief Checks whether the current phase has completed its async work.
+     *
+     * Some phases may submit work (e.g. shader compilation) that completes
+     * asynchronously.  The caller should poll this method each frame after
+     * calling InitializePhase() and only advance to the next phase once
+     * it returns true.
+     *
+     * @param phase The phase index to check.
+     * @return true if the phase is complete (default: always true).
+     */
+    virtual bool IsPhaseComplete(int phase) const
+    {
+        (void)phase;
+        return true;
+    }
+
+    /**
+     * @brief Returns whether Initialize() has been called successfully.
+     * @return True if the preset has been initialized.
+     */
+    bool IsInitialized() const { return m_initialized; }
+
+protected:
+    /**
+     * @brief Sets the initialized flag.  Call from Initialize() implementations.
+     */
+    void SetInitialized() { m_initialized = true; }
+
+public:
+    /**
      * @brief Renders the preset into the current framebuffer.
      * @param audioData Audio data to be used by the preset.
      * @param renderContext The current render context data.
@@ -72,6 +126,7 @@ public:
 
 private:
     std::string m_filename;
+    bool m_initialized{false};
 };
 
 } // namespace libprojectM

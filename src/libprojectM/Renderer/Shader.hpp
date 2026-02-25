@@ -71,13 +71,54 @@ public:
     ~Shader();
 
     /**
-     * @brief Compiles a vertex and fragment shader into a program.
+     * @brief Compiles a vertex and fragment shader into a program (blocking).
      * @throws ShaderException Thrown if compilation of a shader or program linking failed.
      * @param vertexShaderSource The vertex shader source.
      * @param fragmentShaderSource The fragment shader source.
      */
     void CompileProgram(const std::string& vertexShaderSource,
                         const std::string& fragmentShaderSource);
+
+    /**
+     * @brief Submits vertex and fragment shaders for asynchronous compilation.
+     *
+     * When GL_KHR_parallel_shader_compile is available, the driver compiles
+     * shaders on background threads.  The caller should poll IsCompileComplete()
+     * on subsequent frames and call FinalizeCompile() once it returns true.
+     *
+     * If the extension is not available, this behaves identically to
+     * CompileProgram() — compilation happens synchronously and
+     * IsCompileComplete() will return true immediately.
+     *
+     * @throws ShaderException Thrown if shader creation or source upload fails.
+     * @param vertexShaderSource The vertex shader source.
+     * @param fragmentShaderSource The fragment shader source.
+     */
+    void SubmitCompileAsync(const std::string& vertexShaderSource,
+                            const std::string& fragmentShaderSource);
+
+    /**
+     * @brief Polls whether an async compile/link submitted via SubmitCompileAsync() is done.
+     *
+     * Uses GL_COMPLETION_STATUS_KHR to check without blocking.
+     * Returns true if:
+     *   - No async compilation is pending (nothing was submitted, or already finalized).
+     *   - The extension is not available (compile happened synchronously in SubmitCompileAsync).
+     *   - Both shader compilation and program linking have completed.
+     *
+     * @return true if compilation is complete or no async work is pending.
+     */
+    auto IsCompileComplete() const -> bool;
+
+    /**
+     * @brief Finalizes an async compile, checking results and cleaning up.
+     *
+     * Must be called after IsCompileComplete() returns true.
+     * Checks compile/link status and throws on failure (same as CompileProgram).
+     *
+     * @throws ShaderException Thrown if compilation or linking failed.
+     */
+    void FinalizeCompile();
 
     /**
      * @brief Validates that the program can run in the current state.
@@ -194,7 +235,59 @@ private:
      */
     auto CompileShader(const std::string& source, GLenum type) -> GLuint;
 
+    /**
+     * @brief Creates and submits a shader for compilation without checking results.
+     * @param source The shader source.
+     * @param type The shader type.
+     * @return The shader ID.
+     */
+    auto SubmitShader(const std::string& source, GLenum type) -> GLuint;
+
+    /**
+     * @brief Checks compile status of a shader and throws on failure.
+     * @throws ShaderException on compilation error.
+     * @param shader The shader ID.
+     * @param source The original source (for error reporting).
+     * @param type The shader type.
+     */
+    void CheckShaderCompileStatus(GLuint shader, const std::string& source, GLenum type);
+
+    /**
+     * @brief Checks link status and throws on failure.
+     * @throws ShaderException on link error.
+     * @param vertexSource The vertex source (for error reporting).
+     * @param fragmentSource The fragment source (for error reporting).
+     */
+    void CheckLinkStatus(const std::string& vertexSource, const std::string& fragmentSource);
+
+    /**
+     * @brief Advances async state from CompilingShaders to LinkingProgram.
+     *
+     * Checks shader compile results, attaches, and submits link.
+     * Called internally by IsCompileComplete() when both shaders are done.
+     */
+    void AdvanceToLinking();
+
+    /**
+     * @brief Async compilation state tracking.
+     */
+    enum class AsyncState : uint8_t
+    {
+        None,              //!< No async compilation pending.
+        CompilingShaders,  //!< Shaders submitted, waiting for compile completion.
+        LinkingProgram,    //!< Shaders compiled, program link submitted, waiting for completion.
+        Complete           //!< Link complete, ready for FinalizeCompile().
+    };
+
     GLuint m_shaderProgram{}; //!< The program ID.
+
+    // Async state
+    AsyncState m_asyncState{AsyncState::None};
+    GLuint m_asyncVertexShader{};              //!< Vertex shader ID during async compile.
+    GLuint m_asyncFragmentShader{};            //!< Fragment shader ID during async compile.
+    std::string m_asyncVertexSource;           //!< Kept for error reporting.
+    std::string m_asyncFragmentSource;         //!< Kept for error reporting.
+    bool m_asyncParallelAvailable{false};      //!< Whether extension was available at submit time.
 };
 
 } // namespace Renderer

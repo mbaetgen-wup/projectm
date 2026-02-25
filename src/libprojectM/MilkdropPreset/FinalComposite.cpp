@@ -73,6 +73,23 @@ void FinalComposite::LoadCompositeShader(const PresetState& presetState)
     }
 }
 
+void FinalComposite::TranspileCompositeShader()
+{
+    if (m_compositeShader)
+    {
+        try
+        {
+            m_compositeShader->TranspilePresetCode();
+            LOG_DEBUG("[FinalComposite] Successfully pre-transpiled composite shader code.");
+        }
+        catch (Renderer::ShaderException& ex)
+        {
+            LOG_WARN("[FinalComposite] Error pre-transpiling composite shader code: " + ex.message());
+            // Not fatal — TranspileHLSLShader will fall back to inline transpilation.
+        }
+    }
+}
+
 void FinalComposite::CompileCompositeShader(PresetState& presetState)
 {
     if (m_compositeShader)
@@ -90,6 +107,56 @@ void FinalComposite::CompileCompositeShader(PresetState& presetState)
             m_compositeShader = std::make_unique<MilkdropShader>(MilkdropShader::ShaderType::CompositeShader);
             m_compositeShader->LoadCode(defaultCompositeShader);
             m_compositeShader->LoadTexturesAndCompile(presetState);
+        }
+    }
+}
+
+void FinalComposite::CompileCompositeShaderAsync(PresetState& presetState)
+{
+    if (m_compositeShader)
+    {
+        try
+        {
+            m_compositeShader->LoadTexturesAndCompileAsync(presetState);
+            LOG_DEBUG("[FinalComposite] Submitted composite shader for async compilation.");
+        }
+        catch (Renderer::ShaderException& ex)
+        {
+            LOG_WARN("[FinalComposite] Error submitting composite shader - Using fallback shader.");
+
+            // Fall back to default shader (compiled synchronously).
+            m_compositeShader = std::make_unique<MilkdropShader>(MilkdropShader::ShaderType::CompositeShader);
+            m_compositeShader->LoadCode(defaultCompositeShader);
+            m_compositeShader->LoadTexturesAndCompile(presetState);
+        }
+    }
+}
+
+auto FinalComposite::IsCompositeShaderCompileComplete() const -> bool
+{
+    if (!m_compositeShader)
+    {
+        return true;
+    }
+    return m_compositeShader->IsCompileComplete();
+}
+
+void FinalComposite::FinalizeCompositeShaderCompile()
+{
+    if (m_compositeShader)
+    {
+        try
+        {
+            m_compositeShader->FinalizeCompile();
+            LOG_DEBUG("[FinalComposite] Finalized async composite shader compilation.");
+        }
+        catch (Renderer::ShaderException& ex)
+        {
+            // Can't fall back here because we don't have PresetState.
+            // Reset the shader — the Draw method handles null gracefully
+            // by falling back to classic Milkdrop 1 filter effects.
+            LOG_WARN("[FinalComposite] Async composite shader failed — disabling composite shader: " + std::string(ex.what()));
+            m_compositeShader.reset();
         }
     }
 }

@@ -20,10 +20,14 @@ add_library(projectM_main OBJECT
         Logging.cpp
         Logging.hpp
         Preset.hpp
+        PresetCpuWorker.cpp
+        PresetCpuWorker.hpp
         PresetFactory.cpp
         PresetFactory.hpp
         PresetFactoryManager.cpp
         PresetFactoryManager.hpp
+        PresetSwitchContext.hpp
+        PresetSwitchState.hpp
         ProjectM.cpp
         ProjectM.hpp
         ProjectMCWrapper.cpp

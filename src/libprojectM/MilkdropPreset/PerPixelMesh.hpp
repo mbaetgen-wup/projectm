@@ -36,10 +36,36 @@ public:
     void LoadWarpShader(const PresetState& presetState);
 
     /**
+     * @brief Pre-transpiles the warp shader from HLSL to GLSL (CPU only, no GL).
+     *
+     * Must be called after LoadWarpShader().  If called, the subsequent
+     * CompileWarpShader() will skip the expensive transpilation step.
+     */
+    void TranspileWarpShader();
+
+    /**
      * @brief Loads the required textures and compiles the warp shader.
      * @param presetState The preset state to retrieve the configuration values from.
      */
     void CompileWarpShader(PresetState& presetState);
+
+    /**
+     * @brief Loads textures and submits the warp shader for async compilation.
+     * @param presetState The preset state to retrieve the configuration values from.
+     */
+    void CompileWarpShaderAsync(PresetState& presetState);
+
+    /**
+     * @brief Polls whether an async warp shader compile is complete.
+     * @return true if no async compile is in flight or if it has finished.
+     */
+    auto IsWarpShaderCompileComplete() const -> bool;
+
+    /**
+     * @brief Finalizes an async warp shader compile.
+     * @throws ShaderException if compilation or linking failed.
+     */
+    void FinalizeWarpShaderCompile();
 
     /**
      * @brief Renders the transformation mesh.

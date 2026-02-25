@@ -73,6 +73,34 @@ public:
     void Initialize(const Renderer::RenderContext& renderContext) override;
 
     /**
+     * @brief Returns the number of phased initialization steps.
+     *
+     * Phase 0: setup, expression compile, framebuffer resize.
+     * Phase 1: submit warp + composite shaders for async compile.
+     * Phase 2: finalize warp + composite shader compilation.
+     */
+    int InitializePhaseCount() const override { return 3; }
+
+    /**
+     * @brief Executes a single initialization phase.
+     * @param renderContext A render context with the initial data.
+     * @param phase The phase index (0 = setup, 1 = submit shaders, 2 = finalize).
+     */
+    void InitializePhase(const Renderer::RenderContext& renderContext, int phase) override;
+
+    /**
+     * @brief Checks if the current phase's async work has completed.
+     *
+     * Phase 1 submits shaders for async compilation and returns immediately.
+     * IsPhaseComplete(1) polls GL_COMPLETION_STATUS_KHR to check if both
+     * the warp and composite shaders have finished compiling without blocking.
+     *
+     * @param phase The phase index.
+     * @return true if the phase has no outstanding async work.
+     */
+    bool IsPhaseComplete(int phase) const override;
+
+    /**
      * @brief Renders the preset.
      * @param audioData The frame audio data.
      * @param renderContext The current rendering context/information.
