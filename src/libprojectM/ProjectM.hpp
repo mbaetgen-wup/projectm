@@ -304,14 +304,21 @@ private:
     void ProcessPresetSwitch();
 
     /**
-     * @brief Constructs and initializes the preset on the render thread.
-     *
-     * Uses the file data read by the CPU worker, or falls back to the
-     * synchronous factory path for non-file protocols.
+     * @brief Constructs the preset on the render thread and submits
+     *        expression compilation to the CPU worker.
      *
      * @param ctx The active switch context.
      */
     void StageGlWork(std::shared_ptr<PresetSwitchContext>& ctx);
+
+    /**
+     * @brief Runs GL initialization phases after expression compilation.
+     *
+     * Executes one phase per frame to avoid long single-frame stalls.
+     *
+     * @param ctx The active switch context.
+     */
+    void RunGlPhases(std::shared_ptr<PresetSwitchContext>& ctx);
 
     /**
      * @brief Finalizes the preset switch by activating the new preset.

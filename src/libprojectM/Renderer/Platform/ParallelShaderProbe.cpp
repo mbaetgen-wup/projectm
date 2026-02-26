@@ -28,6 +28,23 @@ void ParallelShaderProbe::Probe()
     }
     m_probed = true;
 
+#ifdef __EMSCRIPTEN__
+    // Disable GL_KHR_parallel_shader_compile on Emscripten.
+    //
+    // While Chrome/ANGLE exposes the extension in WebGL, Emscripten's GL
+    // wrapper does not reliably support polling GL_COMPLETION_STATUS_KHR
+    // via glGetShaderiv — the query may silently return GL_FALSE forever,
+    // causing the preset switch state machine to spin indefinitely.
+    //
+    // The synchronous fallback path in Shader::SubmitCompileAsync already
+    // defers the blocking status check by one frame (via glFlush), giving
+    // the browser's internal background compiler time to work.  This is
+    // the safest approach across all browsers and GPU/driver combos.
+    LOG_INFO("[ParallelShaderProbe] Disabled on Emscripten"
+             " (COMPLETION_STATUS_KHR polling unreliable via GL wrapper)");
+    return;
+#endif
+
     // --- Step 1: Retrieve the extension list via GLProbe. ---
     GLInfo info;
     std::string reason;

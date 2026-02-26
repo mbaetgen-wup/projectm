@@ -38,6 +38,8 @@
 #include <Renderer/TextureManager.hpp>
 #include <Renderer/TransitionShaderManager.hpp>
 
+#include <chrono>
+
 #include <UserSprites/SpriteManager.hpp>
 
 #include <sstream>
@@ -657,6 +659,17 @@ void ProjectM::ProcessPresetSwitch()
             StageGlWork(ctx);
             break;
 
+        case PresetSwitchState::ExpressionCompiling:
+            // CPU worker is doing HLSL→GLSL transpile + expression
+            // bytecode compilation.  Nothing to do on the GL thread —
+            // just keep rendering the current preset.  The worker will
+            // advance the state to GlPhases when done.
+            break;
+
+        case PresetSwitchState::GlPhases:
+            RunGlPhases(ctx);
+            break;
+
         case PresetSwitchState::Activating:
             FinalizePresetActivation(ctx);
             break;
@@ -678,24 +691,28 @@ void ProjectM::StageGlWork(std::shared_ptr<PresetSwitchContext>& ctx)
         return;
     }
 
-    // First frame in GlStaging: construct the preset from the file data
-    // that the CPU worker read.  All construction, including GL resource
-    // creation (framebuffers, meshes, vertex buffers), happens here on the
-    // render thread where we have a valid GL context.
+    // ── ONE blocking step per frame: preset construction ──
+    //
+    // Build the preset object from file data.  This includes file
+    // parsing, GL resource creation (FBOs, vertex buffers), and
+    // state initialization.  HLSL→GLSL transpile has been removed
+    // from the constructor — it runs on the CPU worker thread.
+    //
+    // After construction this frame returns.  Remaining GL phases
+    // (Phase 0, Phase 1, Phase 2) each run in their own frame via
+    // RunGlPhases once the worker finishes.
+
     if (!ctx->preset)
     {
+        auto tConstructStart = std::chrono::steady_clock::now();
         try
         {
             if (ctx->fileData.empty())
             {
-                // Non-file protocol that skipped the file-read step
-                // (e.g. idle:// — though that should have been handled
-                //  synchronously; this is a safety net).
                 ctx->preset = m_presetFactoryManager->CreatePresetFromFile(ctx->path);
             }
             else
             {
-                // Determine the file extension for the factory.
                 auto dotPos = ctx->path.find_last_of('.');
                 std::string extension = (dotPos != std::string::npos)
                     ? ctx->path.substr(dotPos)
@@ -723,60 +740,105 @@ void ProjectM::StageGlWork(std::shared_ptr<PresetSwitchContext>& ctx)
             return;
         }
 
-        // Spread GL work across frames: return now and start phased
-        // initialization on the next frame.
+        auto usConstruct = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - tConstructStart).count();
+        LOG_INFO("[StageGlWork] Construct=" + std::to_string(usConstruct / 1000.0f) + "ms");
+
+#if PROJECTM_USE_WORKER_THREAD
+        // Tell Phase 0 to skip inline expression compilation —
+        // the worker handles transpile + expressions.
+        ctx->preset->SetExpressionsCompiled(true);
+
+        // Give the worker access to the texture manager so it can
+        // pre-decode texture images (CPU-only) in parallel.
+        ctx->textureManager = m_textureManager.get();
+
+        // Hand off to CPU worker for HLSL→GLSL transpile + expression
+        // bytecode compilation + texture preloading.  RunGlPhases will
+        // execute Phase 0/1/2 one per frame after the worker finishes.
+        ctx->state.store(PresetSwitchState::ExpressionCompiling, std::memory_order_release);
+        m_cpuWorker->SubmitExpressionCompile(ctx);
+#else
+        // Without a worker thread (e.g. Emscripten without pthreads),
+        // everything is synchronous.  Use the simple Initialize()
+        // path which does all phases in one shot.
+        try
+        {
+            ctx->preset->Initialize(GetRenderContext());
+        }
+        catch (const std::exception& ex)
+        {
+            LOG_ERROR("[ProcessPresetSwitch] Preset initialization failed: " + std::string(ex.what()));
+            ctx->errorMessage = ex.what();
+            ctx->state.store(PresetSwitchState::Failed, std::memory_order_release);
+            return;
+        }
+
+        ctx->state.store(PresetSwitchState::Activating, std::memory_order_release);
+#endif
+        return;
+    }
+}
+
+void ProjectM::RunGlPhases(std::shared_ptr<PresetSwitchContext>& ctx)
+{
+    if (ctx->cancelled.load(std::memory_order_acquire))
+    {
         return;
     }
 
-    // Subsequent frames: execute one initialization phase per frame.
-    // This distributes GL shader compilation across multiple frames
-    // to avoid long single-frame stalls.
-    if (ctx->glInitPhase < ctx->preset->InitializePhaseCount())
+    // Run GL initialization phases.  Synchronous phases are collapsed
+    // into the same frame to minimise end-to-end latency.  We only
+    // yield back to the render loop when a phase has outstanding async
+    // work (e.g. GPU shader compilation via KHR_parallel_shader_compile).
+    while (ctx->glInitPhase < ctx->preset->InitializePhaseCount())
     {
-        // Check if the current phase has completed its async work.
-        // If not, return and poll again on the next frame without
-        // re-executing or advancing the phase.
-        if (ctx->glInitPhaseExecuted && !ctx->preset->IsPhaseComplete(ctx->glInitPhase))
+        // If the current phase was already executed, check completion.
+        if (ctx->glInitPhaseExecuted)
         {
-            return;
-        }
-
-        // Phase is either not yet executed, or has completed its async work.
-        if (!ctx->glInitPhaseExecuted)
-        {
-            try
-            {
-                ctx->preset->InitializePhase(GetRenderContext(), ctx->glInitPhase);
-            }
-            catch (const std::exception& ex)
-            {
-                LOG_ERROR("[ProcessPresetSwitch] GL init phase " + std::to_string(ctx->glInitPhase) + " failed: " + std::string(ex.what()));
-                ctx->errorMessage = ex.what();
-                ctx->state.store(PresetSwitchState::Failed, std::memory_order_release);
-                return;
-            }
-            ctx->glInitPhaseExecuted = true;
-
-            // If this phase has async work, return and poll on next frame.
             if (!ctx->preset->IsPhaseComplete(ctx->glInitPhase))
             {
+                // Async work still pending — poll again next frame.
                 return;
             }
+
+            // Phase completed — advance to next.
+            ctx->glInitPhase++;
+            ctx->glInitPhaseExecuted = false;
+            continue;
         }
 
-        // Phase is complete — advance.
-        ctx->glInitPhase++;
-        ctx->glInitPhaseExecuted = false;
+        // Execute the current phase.
+        try
+        {
+            auto tStart = std::chrono::steady_clock::now();
 
-        // If more phases remain, return and do the next one on the next frame.
-        if (ctx->glInitPhase < ctx->preset->InitializePhaseCount())
+            ctx->preset->InitializePhase(GetRenderContext(), ctx->glInitPhase);
+
+            auto usPhase = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - tStart).count();
+            LOG_INFO("[RunGlPhases] Phase" + std::to_string(ctx->glInitPhase) +
+                     "=" + std::to_string(usPhase / 1000.0f) + "ms");
+        }
+        catch (const std::exception& ex)
+        {
+            LOG_ERROR("[ProcessPresetSwitch] GL init phase " + std::to_string(ctx->glInitPhase) + " failed: " + std::string(ex.what()));
+            ctx->errorMessage = ex.what();
+            ctx->state.store(PresetSwitchState::Failed, std::memory_order_release);
+            return;
+        }
+        ctx->glInitPhaseExecuted = true;
+
+        // If this phase has async work in flight, yield and poll
+        // next frame.  Otherwise loop immediately to the next phase.
+        if (!ctx->preset->IsPhaseComplete(ctx->glInitPhase))
         {
             return;
         }
     }
 
-    // All GL resources are ready.
-    ctx->state.store(PresetSwitchState::Activating, std::memory_order_release);
+    // All phases done — activate immediately in this frame.
+    FinalizePresetActivation(ctx);
 }
 
 void ProjectM::FinalizePresetActivation(std::shared_ptr<PresetSwitchContext>& ctx)

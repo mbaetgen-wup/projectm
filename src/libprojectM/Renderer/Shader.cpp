@@ -115,26 +115,16 @@ void Shader::SubmitCompileAsync(const std::string& vertexShaderSource,
 
     if (!m_asyncParallelAvailable)
     {
-        // Extension not available — the glCompileShader calls above already
-        // blocked.  Check results now and proceed directly to linking.
-        CheckShaderCompileStatus(m_asyncVertexShader, vertexShaderSource, GL_VERTEX_SHADER);
-        CheckShaderCompileStatus(m_asyncFragmentShader, fragmentShaderSource, GL_FRAGMENT_SHADER);
-
-        glAttachShader(m_shaderProgram, m_asyncVertexShader);
-        glAttachShader(m_shaderProgram, m_asyncFragmentShader);
-        glLinkProgram(m_shaderProgram);
-
-        // Link also blocks without the extension.  Clean up and check.
-        glDetachShader(m_shaderProgram, m_asyncVertexShader);
-        glDetachShader(m_shaderProgram, m_asyncFragmentShader);
-        glDeleteShader(m_asyncVertexShader);
-        glDeleteShader(m_asyncFragmentShader);
-        m_asyncVertexShader = 0;
-        m_asyncFragmentShader = 0;
-
-        CheckLinkStatus(vertexShaderSource, fragmentShaderSource);
-
-        m_asyncState = AsyncState::None;
+        // Extension not available — glCompileShader calls above may still
+        // compile asynchronously in some drivers/browsers.  Rather than
+        // immediately querying GL_COMPILE_STATUS (which blocks until done),
+        // defer the check to give the driver at least one frame to work.
+        // The status will be checked in FinalizeCompile() after
+        // IsCompileComplete() returns true.
+        m_asyncVertexSource = vertexShaderSource;
+        m_asyncFragmentSource = fragmentShaderSource;
+        m_asyncState = AsyncState::CompilingShaders;
+        glFlush(); // Hint to the driver to start compilation now.
         return;
     }
 
@@ -155,6 +145,19 @@ auto Shader::IsCompileComplete() const -> bool
 
         case AsyncState::CompilingShaders:
         {
+            if (!m_asyncParallelAvailable)
+            {
+                // No extension — we deferred from SubmitCompileAsync to give the
+                // driver at least one frame.  Now advance directly to link+complete.
+                // These calls will block, but the compile may have already finished
+                // in the background during the deferred frame(s).
+                auto* self = const_cast<Shader*>(this);
+                self->AdvanceToLinking();
+                // Link also blocks without the extension, so go straight to Complete.
+                self->m_asyncState = AsyncState::Complete;
+                return true;
+            }
+
             // Poll GL_COMPLETION_STATUS_KHR on both shaders.
             GLint vertexDone = GL_FALSE;
             GLint fragmentDone = GL_FALSE;

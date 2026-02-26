@@ -38,6 +38,7 @@
 #include <Renderer/CopyTexture.hpp>
 #include <Renderer/Framebuffer.hpp>
 
+#include <atomic>
 #include <memory>
 #include <string>
 
@@ -65,6 +66,17 @@ public:
      * @param presetOutputs initialized and filled with data parsed from a MilkdropPreset
      */
     MilkdropPreset(std::istream& presetData);
+
+    /**
+     * @brief Compiles projectm-eval bytecode and runs per-frame init expressions.
+     *
+     * This is pure CPU work (no GL dependency) and can safely be called
+     * on any thread before Initialize() or InitializePhase(0).  If called
+     * before Initialize, the Phase 0 step will skip expression compilation.
+     */
+    void CompileExpressions();
+
+    void SetExpressionsCompiled(bool compiled) override;
 
     /**
      * @brief Initializes the preset with rendering-related data.
@@ -130,6 +142,23 @@ private:
      */
     void LoadShaderCode();
 
+    /**
+     * @brief Transpiles HLSL shader code to GLSL.
+     *
+     * Pure CPU string transformation — safe to call from any thread.
+     * Must be called after the constructor (which runs LoadWarpShader /
+     * LoadCompositeShader to create the MilkdropShader objects).
+     */
+    void TranspileShaders();
+
+    /**
+     * @brief Pre-decodes texture image files referenced by this preset's shaders.
+     *
+     * Collects sampler names from both the warp and composite shaders, then
+     * asks the TextureManager to scan for and decode the corresponding files.
+     */
+    void PreloadTextures(Renderer::TextureManager* textureManager) override;
+
     auto ParseFilename(const std::string& filename) -> std::string;
 
     std::string m_absoluteFilePath; //!< The absolute file path of the MilkdropPreset
@@ -157,6 +186,8 @@ private:
     FinalComposite m_finalComposite; //!< Final composite shader or filters.
 
     bool m_isFirstFrame{true}; //!< Controls drawing the motion vectors starting with the second frame.
+    std::atomic<bool> m_expressionsCompiled{false}; //!< True once expressions are compiled (or should be skipped by Phase 0).
+    std::atomic<bool> m_shadersTranspiled{false};   //!< True once TranspileShaders() (HLSL→GLSL) has run.
 };
 
 } // namespace MilkdropPreset

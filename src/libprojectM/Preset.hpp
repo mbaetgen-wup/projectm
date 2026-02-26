@@ -10,10 +10,46 @@
 
 namespace libprojectM {
 
+namespace Renderer {
+class TextureManager;
+} // namespace Renderer
+
 class Preset
 {
 public:
     virtual ~Preset() = default;
+
+    /**
+     * @brief Pre-compiles CPU-only expression bytecode.
+     *
+     * This is pure CPU work (no GL dependency) that can safely be called
+     * on any thread before Initialize().  If called, Initialize() / phase 0
+     * will skip expression compilation, saving ~5-7ms on the render thread.
+     *
+     * The default implementation is a no-op.
+     */
+    virtual void CompileExpressions() {}
+
+    /**
+     * @brief Pre-decodes texture image files needed by this preset.
+     *
+     * Pure CPU work (stbi_load) — safe to call from any thread.
+     * Must be called after the constructor (which populates sampler names).
+     * The TextureManager stores the decoded pixel data; the subsequent
+     * GL thread phase will just upload to GPU without disk I/O.
+     *
+     * @param textureManager The texture manager to preload into.
+     */
+    virtual void PreloadTextures(Renderer::TextureManager* textureManager) { (void)textureManager; }
+
+    /**
+     * @brief Marks expression compilation as done (or to be skipped).
+     *
+     * Called by the render thread before running InitializePhase(0) when
+     * expression compilation has been submitted to the CPU worker thread.
+     * This prevents Phase 0 from redundantly compiling expressions inline.
+     */
+    virtual void SetExpressionsCompiled(bool compiled) { (void)compiled; }
 
     /**
      * @brief Initializes additional preset resources.

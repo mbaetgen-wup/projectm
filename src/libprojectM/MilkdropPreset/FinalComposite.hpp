@@ -58,6 +58,14 @@ public:
     void FinalizeCompositeShaderCompile();
 
     /**
+     * @brief Returns the sampler names referenced by the composite shader, if any.
+     */
+    auto GetCompositeSamplerNames() const -> std::set<std::string>
+    {
+        return m_compositeShader ? m_compositeShader->GetSamplerNames() : std::set<std::string>{};
+    }
+
+    /**
      * @brief Renders the composite quad with the appropriate effects or shaders.
      * @param presetState The preset state to retrieve the configuration values from.
      * @param presetPerFrameContext The per-frame context to retrieve the initial vars from.

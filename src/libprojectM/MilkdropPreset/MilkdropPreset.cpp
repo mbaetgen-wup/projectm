@@ -26,6 +26,7 @@
 #include "PresetFileParser.hpp"
 
 #include <Logging.hpp>
+#include <Renderer/TextureManager.hpp>
 
 #include <chrono>
 #include <thread>
@@ -56,16 +57,60 @@ MilkdropPreset::MilkdropPreset(std::istream& presetData)
     Load(presetData);
 }
 
+void MilkdropPreset::CompileExpressions()
+{
+    // Called by the CPU worker thread.  Always compile — even if
+    // m_expressionsCompiled was set to true by the render thread
+    // (which only uses that flag to skip Phase 0's inline path).
+
+    // Transpile shader code (HLSL→GLSL) first.
+    // This is CPU-only string transformation work.  The shader objects
+    // were already created by the constructor on the GL thread;
+    // we just do the expensive transpile step here.
+    if (!m_shadersTranspiled)
+    {
+        TranspileShaders();
+        m_shadersTranspiled = true;
+    }
+
+    CompileCodeAndRunInitExpressions();
+    m_expressionsCompiled = true;
+}
+
+void MilkdropPreset::SetExpressionsCompiled(bool compiled)
+{
+    m_expressionsCompiled = compiled;
+}
+
 void MilkdropPreset::Initialize(const Renderer::RenderContext& renderContext)
 {
     // Monolithic path: run all initialization synchronously.
+    auto t0 = std::chrono::steady_clock::now();
+
     // Phase 0: setup.
     assert(renderContext.textureManager);
     m_state.renderContext = renderContext;
     m_state.blurTexture.Initialize(renderContext);
     m_state.LoadShaders();
 
-    CompileCodeAndRunInitExpressions();
+    auto t1 = std::chrono::steady_clock::now();
+
+    // Skip if already done on CPU worker thread.
+    if (!m_expressionsCompiled)
+    {
+        // Transpile + expressions together (synchronous path).
+        TranspileShaders();
+        m_shadersTranspiled = true;
+        CompileCodeAndRunInitExpressions();
+        m_expressionsCompiled = true;
+    }
+    else if (!m_shadersTranspiled)
+    {
+        TranspileShaders();
+        m_shadersTranspiled = true;
+    }
+
+    auto t2 = std::chrono::steady_clock::now();
 
     m_framebuffer.SetSize(renderContext.viewportSizeX, renderContext.viewportSizeY);
     m_motionVectorUVMap->SetSize(renderContext.viewportSizeX, renderContext.viewportSizeY);
@@ -74,11 +119,28 @@ void MilkdropPreset::Initialize(const Renderer::RenderContext& renderContext)
         m_state.mainTexture = m_framebuffer.GetColorAttachmentTexture(1, 0);
     }
 
+    auto t3 = std::chrono::steady_clock::now();
+
     // Use synchronous compilation — no async submit/poll/finalize dance.
     m_perPixelMesh.CompileWarpShader(m_state);
+
+    auto t4 = std::chrono::steady_clock::now();
+
     m_finalComposite.CompileCompositeShader(m_state);
 
+    auto t5 = std::chrono::steady_clock::now();
+
     SetInitialized();
+
+    auto us = [](auto a, auto b) {
+        return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count();
+    };
+    LOG_INFO("[MilkdropPreset::Initialize] setup=" + std::to_string(us(t0, t1) / 1000.0f) +
+             "ms expr=" + std::to_string(us(t1, t2) / 1000.0f) +
+             "ms fbo=" + std::to_string(us(t2, t3) / 1000.0f) +
+             "ms warp=" + std::to_string(us(t3, t4) / 1000.0f) +
+             "ms comp=" + std::to_string(us(t4, t5) / 1000.0f) +
+             "ms total=" + std::to_string(us(t0, t5) / 1000.0f) + "ms");
 }
 
 void MilkdropPreset::InitializePhase(const Renderer::RenderContext& renderContext, int phase)
@@ -94,7 +156,12 @@ void MilkdropPreset::InitializePhase(const Renderer::RenderContext& renderContex
             m_state.blurTexture.Initialize(renderContext);
             m_state.LoadShaders();
 
-            CompileCodeAndRunInitExpressions();
+            // Skip if already done on CPU worker thread.
+            if (!m_expressionsCompiled)
+            {
+                CompileCodeAndRunInitExpressions();
+                m_expressionsCompiled = true;
+            }
 
             m_framebuffer.SetSize(renderContext.viewportSizeX, renderContext.viewportSizeY);
             m_motionVectorUVMap->SetSize(renderContext.viewportSizeX, renderContext.viewportSizeY);
@@ -334,8 +401,13 @@ void MilkdropPreset::InitializePreset(PresetFileParser& parsedFile)
         m_customShapes[i] = std::move(shape);
     }
 
-    // Preload shaders
-    LoadShaderCode();
+    // Create shader objects and load HLSL code from preset state.
+    // This must run on the GL thread because LoadCompositeShader may
+    // create VideoEcho/Filters objects that allocate GL vertex buffers.
+    // The HLSL→GLSL transpile step is deferred to TranspileShaders()
+    // which runs on the CPU worker thread.
+    m_perPixelMesh.LoadWarpShader(m_state);
+    m_finalComposite.LoadCompositeShader(m_state);
 }
 
 void MilkdropPreset::CompileCodeAndRunInitExpressions()
@@ -371,6 +443,38 @@ void MilkdropPreset::LoadShaderCode()
     // when CompileWarpShader/CompileCompositeShader are called.
     m_perPixelMesh.TranspileWarpShader();
     m_finalComposite.TranspileCompositeShader();
+}
+
+void MilkdropPreset::TranspileShaders()
+{
+    // Pure CPU string transformation — safe to call from any thread.
+    // Must be called after LoadWarpShader/LoadCompositeShader have
+    // created the MilkdropShader objects (which happens in the
+    // constructor on the GL thread).
+    m_perPixelMesh.TranspileWarpShader();
+    m_finalComposite.TranspileCompositeShader();
+}
+
+void MilkdropPreset::PreloadTextures(Renderer::TextureManager* textureManager)
+{
+    if (!textureManager)
+    {
+        return;
+    }
+
+    // Collect sampler names from both shaders.
+    std::set<std::string> allSamplers;
+
+    auto warpSamplers = m_perPixelMesh.GetWarpSamplerNames();
+    allSamplers.insert(warpSamplers.begin(), warpSamplers.end());
+
+    auto compositeSamplers = m_finalComposite.GetCompositeSamplerNames();
+    allSamplers.insert(compositeSamplers.begin(), compositeSamplers.end());
+
+    if (!allSamplers.empty())
+    {
+        textureManager->PreloadTexturesForSamplers(allSamplers);
+    }
 }
 
 auto MilkdropPreset::ParseFilename(const std::string& filename) -> std::string

@@ -1,7 +1,11 @@
 #pragma once
 
+#include "MilkdropShader.hpp"
+
 #include <Renderer/Mesh.hpp>
 #include <Renderer/Shader.hpp>
+
+#include <set>
 
 namespace libprojectM {
 namespace MilkdropPreset {
@@ -9,7 +13,6 @@ namespace MilkdropPreset {
 class PresetState;
 class PerFrameContext;
 class PerPixelContext;
-class MilkdropShader;
 
 /**
  * @brief The "per-pixel" transformation mesh.
@@ -66,6 +69,14 @@ public:
      * @throws ShaderException if compilation or linking failed.
      */
     void FinalizeWarpShaderCompile();
+
+    /**
+     * @brief Returns the sampler names referenced by the warp shader, if any.
+     */
+    auto GetWarpSamplerNames() const -> std::set<std::string>
+    {
+        return m_warpShader ? m_warpShader->GetSamplerNames() : std::set<std::string>{};
+    }
 
     /**
      * @brief Renders the transformation mesh.

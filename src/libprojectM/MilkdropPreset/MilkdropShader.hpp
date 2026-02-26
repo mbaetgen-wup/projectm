@@ -105,6 +105,14 @@ public:
      */
     auto Shader() -> Renderer::Shader&;
 
+    /**
+     * @brief Returns the sampler names referenced in the shader code.
+     *
+     * Populated during LoadCode().  Safe to read from any thread after
+     * the constructor has completed.
+     */
+    auto GetSamplerNames() const -> const std::set<std::string>& { return m_samplerNames; }
+
 private:
     /**
      * @brief Prepares the shader code to be translated into GLSL.

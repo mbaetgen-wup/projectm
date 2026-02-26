@@ -13,6 +13,7 @@
 namespace libprojectM {
 
 class Preset;
+namespace Renderer { class TextureManager; }
 
 /**
  * @brief Represents a single in-flight preset transition.
@@ -51,7 +52,16 @@ struct PresetSwitchContext
     /// Error message set by the CPU worker when loading fails.
     std::string errorMessage;
 
+    /// True if expression compilation was done on the CPU worker thread.
+    bool expressionsCompiled{false};
+
     // ---- GL staging data (render thread only) ----
+
+    /// Pointer to the texture manager, set by the render thread before
+    /// handing off to the CPU worker.  The worker uses it to pre-decode
+    /// texture image files (CPU-only stbi_load) so the GL thread can
+    /// avoid synchronous disk I/O during shader compilation.
+    class Renderer::TextureManager* textureManager{nullptr};
 
     /// The fully-constructed and GL-initialized preset.
     /// Created and populated exclusively on the render thread.

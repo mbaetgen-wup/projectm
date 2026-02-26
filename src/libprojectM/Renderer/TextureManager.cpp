@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <cstdlib>
 #include <memory>
+#include <set>
+#include <mutex>
 #include <random>
 #include <vector>
 
@@ -260,6 +262,37 @@ auto TextureManager::LoadTexture(const ScannedFile& file) -> std::shared_ptr<Tex
     int width{};
     int height{};
 
+    // Check for pre-decoded pixel data from the CPU worker thread.
+    {
+        std::lock_guard<std::mutex> lock(m_preloadMutex);
+        auto it = m_preloadedTextures.find(file.lowerCaseBaseName);
+        if (it != m_preloadedTextures.end())
+        {
+            width = it->second.width;
+            height = it->second.height;
+            auto* pixels = it->second.pixels.get();
+
+            if (pixels && width > 0 && height > 0)
+            {
+                auto format = TextureFormatFromChannels(4);
+                auto newTexture = std::make_shared<Texture>(file.lowerCaseBaseName,
+                    reinterpret_cast<const void*>(pixels),
+                    GL_TEXTURE_2D, width, height, 0, format, format, GL_UNSIGNED_BYTE, true);
+
+                uint32_t const memoryBytes = width * height * 4;
+                m_textures[file.lowerCaseBaseName] = newTexture;
+                m_textureStats.insert({file.lowerCaseBaseName, {memoryBytes}});
+
+                m_preloadedTextures.erase(it);
+                LOG_DEBUG("[TextureManager] Used preloaded texture data for \"" + file.lowerCaseBaseName + "\"");
+                return newTexture;
+            }
+
+            // Preloaded data was invalid; remove and fall through to sync load.
+            m_preloadedTextures.erase(it);
+        }
+    }
+
     std::unique_ptr<stbi_uc, decltype(&free)> imageData(stbi_load(file.filePath.c_str(), &width, &height, nullptr, 4), free);
 
     if (imageData.get() == nullptr)
@@ -278,6 +311,119 @@ auto TextureManager::LoadTexture(const ScannedFile& file) -> std::shared_ptr<Tex
     m_textureStats.insert({file.lowerCaseBaseName, {memoryBytes}});
 
     return newTexture;
+}
+
+void TextureManager::PreloadTextureData(const std::string& name, const std::string& filePath)
+{
+    std::string lowerCaseName = Utils::ToLower(name);
+
+    int width{};
+    int height{};
+    std::unique_ptr<stbi_uc, void(*)(void*)> imageData(
+        stbi_load(filePath.c_str(), &width, &height, nullptr, 4), free);
+
+    if (!imageData)
+    {
+        LOG_DEBUG("[TextureManager] PreloadTextureData: failed to decode \"" + filePath + "\"");
+        return;
+    }
+
+    PreloadedImageData data;
+    data.pixels = std::move(imageData);
+    data.width = width;
+    data.height = height;
+
+    {
+        std::lock_guard<std::mutex> lock(m_preloadMutex);
+        m_preloadedTextures[lowerCaseName] = std::move(data);
+    }
+
+    LOG_DEBUG("[TextureManager] Pre-decoded texture \"" + lowerCaseName + "\" (" +
+              std::to_string(width) + "x" + std::to_string(height) + ")");
+}
+
+void TextureManager::PreloadTexturesForSamplers(const std::set<std::string>& samplerNames)
+{
+    // Built-in texture names that don't come from disk.
+    static const std::set<std::string> builtinNames = {
+        "main", "blur1", "blur2", "blur3",
+        "noise_lq_lite", "noise_lq", "noise_mq", "noise_hq",
+        "noisevol_lq", "noisevol_hq",
+    };
+
+    // Collect the unqualified, lower-case texture names we actually need
+    // to load from disk.
+    std::set<std::string> needNames;
+    for (const auto& name : samplerNames)
+    {
+        std::string baseName = name;
+        if (name.length() > 3 && name.at(2) == '_')
+        {
+            baseName = name.substr(3);
+        }
+        std::string lower = Utils::ToLower(baseName);
+
+        if (builtinNames.count(lower))
+        {
+            continue;
+        }
+
+        // Skip "randNN" textures — they're handled specially.
+        if (lower.size() == 6 && lower.substr(0, 4) == "rand" &&
+            std::isdigit(static_cast<unsigned char>(lower[4])) &&
+            std::isdigit(static_cast<unsigned char>(lower[5])))
+        {
+            continue;
+        }
+
+        // Already in the preloaded cache?
+        {
+            std::lock_guard<std::mutex> lock(m_preloadMutex);
+            if (m_preloadedTextures.count(lower))
+            {
+                continue;
+            }
+        }
+
+        // Already loaded as a GL texture?
+        if (m_textures.count(lower))
+        {
+            continue;
+        }
+
+        needNames.insert(lower);
+    }
+
+    if (needNames.empty())
+    {
+        return;
+    }
+
+    // Independent filesystem scan — doesn't touch m_scannedTextureFiles.
+    // This is safe to call from any thread.
+    struct ScannedEntry {
+        std::string filePath;
+        std::string lowerBaseName;
+    };
+    std::vector<ScannedEntry> scannedFiles;
+
+    FileScanner scanner(m_textureSearchPaths, m_extensions);
+    scanner.Scan([&scannedFiles](const std::string& path, const std::string& baseName) {
+        scannedFiles.push_back({path, Utils::ToLower(baseName)});
+    });
+
+    // Match needed names to scanned files and pre-decode.
+    for (const auto& name : needNames)
+    {
+        for (const auto& file : scannedFiles)
+        {
+            if (file.lowerBaseName == name)
+            {
+                PreloadTextureData(name, file.filePath);
+                break;
+            }
+        }
+    }
 }
 
 auto TextureManager::GetRandomTexture(const std::string& randomName) -> TextureSamplerDescriptor
