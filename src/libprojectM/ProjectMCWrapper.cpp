@@ -1,6 +1,7 @@
 #include "ProjectMCWrapper.hpp"
 
 #include "Renderer/Platform/GladLoader.hpp"
+#include "Renderer/Platform/ParallelShaderProbe.hpp"
 
 #include <projectM-4/projectM.h>
 
@@ -90,6 +91,9 @@ projectm_handle projectm_create_with_opengl_load_proc(void* (*load_proc)(const c
         {
             return nullptr;
         }
+
+        // Probe for GL_KHR_parallel_shader_compile support (guarded internally, valid to call multiple times)
+        libprojectM::Renderer::Platform::ParallelShaderProbe::Instance().Probe();
 
         // create projectM
         auto* projectMInstance = new libprojectM::projectMWrapper();

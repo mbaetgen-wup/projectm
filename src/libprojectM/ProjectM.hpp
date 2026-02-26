@@ -34,6 +34,11 @@
 #include <vector>
 
 namespace libprojectM {
+class PresetCpuWorker;
+struct PresetSwitchContext;
+} // namespace libprojectM
+
+namespace libprojectM {
 
 namespace Renderer {
 class CopyTexture;
@@ -288,6 +293,39 @@ private:
 
     void StartPresetTransition(std::unique_ptr<Preset>&& preset, bool hardCut);
 
+    /**
+     * @brief Processes a pending asynchronous preset switch.
+     *
+     * Called once per frame at the start of RenderFrame().
+     * Drives the GL staging state machine: constructs preset from the
+     * file data produced by the CPU worker, initializes GL resources,
+     * then activates the preset.
+     */
+    void ProcessPresetSwitch();
+
+    /**
+     * @brief Constructs the preset on the render thread and submits
+     *        expression compilation to the CPU worker.
+     *
+     * @param ctx The active switch context.
+     */
+    void StageGlWork(std::shared_ptr<PresetSwitchContext>& ctx);
+
+    /**
+     * @brief Runs GL initialization phases after expression compilation.
+     *
+     * Executes one phase per frame to avoid long single-frame stalls.
+     *
+     * @param ctx The active switch context.
+     */
+    void RunGlPhases(std::shared_ptr<PresetSwitchContext>& ctx);
+
+    /**
+     * @brief Finalizes the preset switch by activating the new preset.
+     * @param ctx The active switch context.
+     */
+    void FinalizePresetActivation(std::shared_ptr<PresetSwitchContext>& ctx);
+
     void LoadIdlePreset();
 
     auto GetRenderContext() -> Renderer::RenderContext;
@@ -314,6 +352,9 @@ private:
 
     /** Timing information */
     int m_frameCount{0}; //!< Rendered frame count since start
+#if PROJECTM_PRESET_SWITCH_TIMING
+    int m_framesAfterSwitch{-1}; //!< Counts frames after preset activation, -1 when not tracking.
+#endif
 
     bool m_presetLocked{false};         //!< If true, the preset change event will not be sent.
     bool m_presetChangeNotified{false}; //!< Stores whether the user has been notified that projectM wants to switch the preset.
@@ -331,6 +372,9 @@ private:
     std::unique_ptr<Renderer::PresetTransition> m_transition;                     //!< Transition effect used for blending.
     std::unique_ptr<TimeKeeper> m_timeKeeper;                                     //!< Keeps the different timers used to render and switch presets.
     std::unique_ptr<UserSprites::SpriteManager> m_spriteManager;                  //!< Manages all types of user sprites.
+
+    std::unique_ptr<PresetCpuWorker> m_cpuWorker;                                 //!< Background thread for CPU-bound file reading.
+    std::shared_ptr<PresetSwitchContext> m_activeSwitch;                           //!< Current in-flight preset switch (render thread + shared with worker).
 };
 
 } // namespace libprojectM

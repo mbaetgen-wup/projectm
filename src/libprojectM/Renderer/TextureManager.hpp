@@ -4,6 +4,8 @@
 #include "Renderer/TextureTypes.hpp"
 
 #include <map>
+#include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -60,6 +62,35 @@ public:
     void PurgeTextures();
 
     /**
+     * @brief Pre-decodes an image file into CPU memory for later GPU upload.
+     *
+     * Thread-safe: may be called from any thread.  The decoded pixel data
+     * is stored internally and used by the next GetTexture() call for this
+     * name, avoiding synchronous disk I/O + image decode on the render thread.
+     *
+     * @param name The texture name (as referenced in the preset shader).
+     * @param filePath The full path to the image file to decode.
+     */
+    void PreloadTextureData(const std::string& name, const std::string& filePath);
+
+    /**
+     * @brief Scans texture search paths and pre-decodes images for the given sampler names.
+     *
+     * Thread-safe: may be called from any thread.  Performs an independent
+     * filesystem scan (does not modify the shared m_scannedTextureFiles list),
+     * then decodes each matching image into CPU memory.  The decoded pixel data
+     * is stored internally and consumed by the next LoadTexture() call for the
+     * corresponding name, avoiding synchronous disk I/O on the render thread.
+     *
+     * Built-in names (main, blur1-3, noise_*, noisevol_*) and "randNN" names
+     * are skipped since they don't come from disk.
+     *
+     * @param samplerNames Sampler names as they appear in the HLSL shader code
+     *                     (e.g. "devboxb", "fw_worms", "rand00").
+     */
+    void PreloadTexturesForSamplers(const std::set<std::string>& samplerNames);
+
+    /**
      * @brief Sets a callback function for loading textures from non-filesystem sources.
      * @param callback The callback function, or nullptr to disable.
      */
@@ -112,6 +143,19 @@ private:
     std::vector<std::string> m_extensions{".jpg", ".jpeg", ".dds", ".png", ".tga", ".bmp", ".dib"};
 
     TextureLoadCallback m_textureLoadCallback; //!< Optional callback for loading textures from non-filesystem sources.
+
+    /**
+     * @brief Pre-decoded image pixel data, ready for GPU upload.
+     */
+    struct PreloadedImageData {
+        std::unique_ptr<unsigned char, void(*)(void*)> pixels{nullptr, free};
+        int width{};
+        int height{};
+    };
+
+    /// Pre-decoded textures from CPU worker.  Protected by m_preloadMutex.
+    std::map<std::string, PreloadedImageData> m_preloadedTextures;
+    std::mutex m_preloadMutex;
 };
 
 } // namespace Renderer

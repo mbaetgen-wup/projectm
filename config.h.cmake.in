@@ -6,6 +6,9 @@
 /* Define PROJECTM_USE_THREADS */
 #cmakedefine01 PROJECTM_USE_THREADS
 
+/* Define PROJECTM_PRESET_SWITCH_TIMING */
+#cmakedefine01 PROJECTM_PRESET_SWITCH_TIMING
+
 /* Version number of package */
 #define VERSION "@libprojectM_VERSION@"
 

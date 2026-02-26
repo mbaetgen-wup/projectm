@@ -23,7 +23,11 @@
 
 #include "Logging.hpp"
 #include "Preset.hpp"
+#include "PresetCpuWorker.hpp"
+#include "PresetFactory.hpp"
 #include "PresetFactoryManager.hpp"
+#include "PresetSwitchContext.hpp"
+#include "PresetSwitchState.hpp"
 #include "TimeKeeper.hpp"
 
 #include <Audio/PCM.hpp>
@@ -34,7 +38,11 @@
 #include <Renderer/TextureManager.hpp>
 #include <Renderer/TransitionShaderManager.hpp>
 
+#include <chrono>
+
 #include <UserSprites/SpriteManager.hpp>
+
+#include <sstream>
 
 namespace libprojectM {
 
@@ -46,7 +54,12 @@ ProjectM::ProjectM()
 
 ProjectM::~ProjectM()
 {
-    // Can't use "=default" in the header due to unique_ptr requiring the actual type declarations.
+    // Shut down the CPU worker before destroying any state it may reference.
+    if (m_activeSwitch)
+    {
+        m_activeSwitch->cancelled.store(true, std::memory_order_release);
+    }
+    m_cpuWorker.reset();
 }
 
 void ProjectM::PresetSwitchRequestedEvent(bool) const
@@ -59,22 +72,68 @@ void ProjectM::PresetSwitchFailedEvent(const std::string&, const std::string&) c
 
 void ProjectM::LoadPresetFile(const std::string& presetFilename, bool smoothTransition)
 {
-    try
+    // Cancel any in-flight switch.
+    if (m_activeSwitch)
     {
+        m_activeSwitch->cancelled.store(true, std::memory_order_release);
+        m_activeSwitch.reset();
+    }
+
+    // Check if this is a non-file protocol (e.g. idle://).
+    // These don't do disk I/O and construct from built-in data,
+    // so we keep them synchronous on the render thread.
+    std::string resolvedPath;
+    std::string protocol = PresetFactory::Protocol(presetFilename, resolvedPath);
+
+    if (!protocol.empty() && protocol != "file")
+    {
+        // Synchronous path — original behaviour.
+        try
+        {
+            m_textureManager->PurgeTextures();
+            StartPresetTransition(m_presetFactoryManager->CreatePresetFromFile(presetFilename), !smoothTransition);
+        }
+        catch (const std::exception& ex)
+        {
+            LOG_ERROR(ex.what());
+            PresetSwitchFailedEvent(presetFilename, ex.what());
+        }
+        return;
+    }
+
+    // Asynchronous path — offload file I/O to the background thread.
+#if PROJECTM_PRESET_SWITCH_TIMING
+    {
+        auto tPurge = std::chrono::steady_clock::now();
         m_textureManager->PurgeTextures();
-        StartPresetTransition(m_presetFactoryManager->CreatePresetFromFile(presetFilename), !smoothTransition);
+        auto usPurge = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - tPurge).count();
+        LOG_INFO("[PresetSwitch] PurgeTextures=" + std::to_string(usPurge / 1000.0f) + "ms");
     }
-    catch (const std::exception& ex)
-    {
-        LOG_ERROR(ex.what());
-        PresetSwitchFailedEvent(presetFilename, ex.what());
-    }
+#else
+    m_textureManager->PurgeTextures();
+#endif
+
+    auto ctx = std::make_shared<PresetSwitchContext>();
+    ctx->path = presetFilename;
+    ctx->smoothTransition = smoothTransition;
+    ctx->state.store(PresetSwitchState::CpuLoading, std::memory_order_release);
+
+    m_activeSwitch = ctx;
+    m_cpuWorker->StartLoad(ctx);
 }
 
 void ProjectM::LoadPresetData(std::istream& presetData, bool smoothTransition)
 {
     try
     {
+        // Cancel any in-flight async switch.
+        if (m_activeSwitch)
+        {
+            m_activeSwitch->cancelled.store(true, std::memory_order_release);
+            m_activeSwitch.reset();
+        }
+
         m_textureManager->PurgeTextures();
         StartPresetTransition(m_presetFactoryManager->CreatePresetFromStream(".milk", presetData), !smoothTransition);
     }
@@ -120,6 +179,20 @@ void ProjectM::RenderFrame(uint32_t targetFramebufferObject /*= 0*/)
     {
         return;
     }
+
+#if PROJECTM_PRESET_SWITCH_TIMING
+    auto tFrameStart = std::chrono::steady_clock::now();
+#endif
+
+    // Drive the asynchronous preset switch state machine.
+    if (m_activeSwitch)
+    {
+        ProcessPresetSwitch();
+    }
+
+#if PROJECTM_PRESET_SWITCH_TIMING
+    auto tAfterSwitch = std::chrono::steady_clock::now();
+#endif
 
     // Update FPS and other timer values.
     m_timeKeeper->UpdateTimers();
@@ -175,9 +248,18 @@ void ProjectM::RenderFrame(uint32_t targetFramebufferObject /*= 0*/)
     {
         if (m_transition->IsDone(m_timeKeeper->GetFrameTime()))
         {
+#if PROJECTM_PRESET_SWITCH_TIMING
+            auto tTransEnd = std::chrono::steady_clock::now();
+#endif
             m_activePreset = std::move(m_transitioningPreset);
             m_transitioningPreset.reset();
             m_transition.reset();
+#if PROJECTM_PRESET_SWITCH_TIMING
+            auto usTransEnd = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - tTransEnd).count();
+            LOG_INFO("[PresetSwitch] TransitionEnd=" + std::to_string(usTransEnd / 1000.0f)
+                + "ms (old preset destroyed)");
+#endif
         }
         else
         {
@@ -190,6 +272,16 @@ void ProjectM::RenderFrame(uint32_t targetFramebufferObject /*= 0*/)
     m_activePreset->RenderFrame(audioData, renderContext);
 
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(targetFramebufferObject));
+    glViewport(0, 0, renderContext.viewportSizeX, renderContext.viewportSizeY);
+
+    // On WebGL2 / Chrome ANGLE, the default framebuffer's draw buffer must
+    // be explicitly set to GL_BACK after preset rendering, which may leave
+    // per-FBO draw buffer state that leaks into FBO 0 on some drivers.
+    if (targetFramebufferObject == 0)
+    {
+        GLenum backBuf = GL_BACK;
+        glDrawBuffers(1, &backBuf);
+    }
 
     if (m_transition != nullptr && m_transitioningPreset != nullptr)
     {
@@ -205,6 +297,37 @@ void ProjectM::RenderFrame(uint32_t targetFramebufferObject /*= 0*/)
 
     m_frameCount++;
     m_previousFrameVolume = audioData.vol;
+
+#if PROJECTM_PRESET_SWITCH_TIMING
+    // Frame-time spike detection.  Log the first few frames after a
+    // preset switch and any frame that exceeds a threshold.
+    if (m_framesAfterSwitch >= 0)
+    {
+        m_framesAfterSwitch++;
+    }
+
+    auto usFrame = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - tFrameStart).count();
+    auto usSwitch = std::chrono::duration_cast<std::chrono::microseconds>(
+        tAfterSwitch - tFrameStart).count();
+    float msFrame = usFrame / 1000.0f;
+    float msSwitch = usSwitch / 1000.0f;
+    float msRender = (usFrame - usSwitch) / 1000.0f;
+
+    if (m_framesAfterSwitch >= 0 && m_framesAfterSwitch <= 5)
+    {
+        LOG_INFO("[FrameTime] after_switch=" + std::to_string(m_framesAfterSwitch)
+            + " total=" + std::to_string(msFrame)
+            + "ms switch=" + std::to_string(msSwitch)
+            + "ms render=" + std::to_string(msRender) + "ms");
+    }
+    else if (msFrame > 12.0f)
+    {
+        LOG_INFO("[FrameTime] SPIKE total=" + std::to_string(msFrame)
+            + "ms switch=" + std::to_string(msSwitch)
+            + "ms render=" + std::to_string(msRender) + "ms");
+    }
+#endif
 }
 
 void ProjectM::Initialize()
@@ -225,6 +348,8 @@ void ProjectM::Initialize()
     m_textureCopier = std::make_unique<Renderer::CopyTexture>();
 
     m_spriteManager = std::make_unique<UserSprites::SpriteManager>();
+
+    m_cpuWorker = std::make_unique<PresetCpuWorker>();
 
     m_presetFactoryManager->initialize();
 
@@ -282,7 +407,12 @@ void ProjectM::StartPresetTransition(std::unique_ptr<Preset>&& preset, bool hard
         return;
     }
 
-    preset->Initialize(GetRenderContext());
+    // Only call Initialize if not already done (the async preset switch
+    // path initializes the preset in StageGlWork before calling here).
+    if (!preset->IsInitialized())
+    {
+        preset->Initialize(GetRenderContext());
+    }
 
     // If already in a transition, force immediate completion.
     if (m_transitioningPreset != nullptr)
@@ -293,7 +423,15 @@ void ProjectM::StartPresetTransition(std::unique_ptr<Preset>&& preset, bool hard
 
     if (m_activePreset && !m_presetStartClean)
     {
+#if PROJECTM_PRESET_SWITCH_TIMING
+        auto tDraw = std::chrono::steady_clock::now();
+#endif
         preset->DrawInitialImage(m_activePreset->OutputTexture(), GetRenderContext());
+#if PROJECTM_PRESET_SWITCH_TIMING
+        auto usDraw = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - tDraw).count();
+        LOG_INFO("[PresetSwitch] DrawInitialImage=" + std::to_string(usDraw / 1000.0f) + "ms");
+#endif
     }
 
     if (hardCut)
@@ -305,7 +443,15 @@ void ProjectM::StartPresetTransition(std::unique_ptr<Preset>&& preset, bool hard
     {
         m_transitioningPreset = std::move(preset);
         m_timeKeeper->StartSmoothing();
+#if PROJECTM_PRESET_SWITCH_TIMING
+        auto tTransition = std::chrono::steady_clock::now();
+#endif
         m_transition = std::make_unique<Renderer::PresetTransition>(m_transitionShaderManager->RandomTransition(), m_softCutDuration, m_timeKeeper->GetFrameTime());
+#if PROJECTM_PRESET_SWITCH_TIMING
+        auto usTransition = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - tTransition).count();
+        LOG_INFO("[PresetSwitch] TransitionSetup=" + std::to_string(usTransition / 1000.0f) + "ms");
+#endif
     }
 }
 
@@ -559,6 +705,255 @@ void ProjectM::TouchDestroy(float, float)
 void ProjectM::TouchDestroyAll()
 {
     // UNIMPLEMENTED
+}
+
+void ProjectM::ProcessPresetSwitch()
+{
+    auto ctx = m_activeSwitch;
+    if (!ctx)
+    {
+        return;
+    }
+
+    // If the switch was cancelled, clean up.
+    if (ctx->cancelled.load(std::memory_order_acquire))
+    {
+        m_activeSwitch.reset();
+        return;
+    }
+
+    auto currentState = ctx->state.load(std::memory_order_acquire);
+
+    switch (currentState)
+    {
+        case PresetSwitchState::Failed:
+        {
+            PresetSwitchFailedEvent(ctx->path, ctx->errorMessage);
+            m_activeSwitch.reset();
+
+            // The async failure happened after the playlist's synchronous
+            // retry loop already returned.  Fire a switch request so the
+            // playlist picks a new preset immediately instead of waiting
+            // for the next timer tick.
+            PresetSwitchRequestedEvent(false);
+            break;
+        }
+
+        case PresetSwitchState::GlStaging:
+            StageGlWork(ctx);
+            break;
+
+        case PresetSwitchState::ExpressionCompiling:
+            // CPU worker is doing HLSL→GLSL transpile + expression
+            // bytecode compilation.  Nothing to do on the GL thread —
+            // just keep rendering the current preset.  The worker will
+            // advance the state to GlPhases when done.
+            break;
+
+        case PresetSwitchState::GlPhases:
+            RunGlPhases(ctx);
+            break;
+
+        case PresetSwitchState::Activating:
+            FinalizePresetActivation(ctx);
+            break;
+
+        case PresetSwitchState::Completed:
+            m_activeSwitch.reset();
+            break;
+
+        default:
+            // CpuLoading or Idle – CPU worker still busy, nothing to do yet.
+            break;
+    }
+}
+
+void ProjectM::StageGlWork(std::shared_ptr<PresetSwitchContext>& ctx)
+{
+    if (ctx->cancelled.load(std::memory_order_acquire))
+    {
+        return;
+    }
+
+    // ── ONE blocking step per frame: preset construction ──
+    //
+    // Build the preset object from file data.  This includes file
+    // parsing, GL resource creation (FBOs, vertex buffers), and
+    // state initialization.  HLSL→GLSL transpile has been removed
+    // from the constructor — it runs on the CPU worker thread.
+    //
+    // After construction this frame returns.  Remaining GL phases
+    // (Phase 0, Phase 1, Phase 2) each run in their own frame via
+    // RunGlPhases once the worker finishes.
+
+    if (!ctx->preset)
+    {
+#if PROJECTM_PRESET_SWITCH_TIMING
+        auto tConstructStart = std::chrono::steady_clock::now();
+#endif
+        try
+        {
+            if (ctx->fileData.empty())
+            {
+                ctx->preset = m_presetFactoryManager->CreatePresetFromFile(ctx->path);
+            }
+            else
+            {
+                auto dotPos = ctx->path.find_last_of('.');
+                std::string extension = (dotPos != std::string::npos)
+                    ? ctx->path.substr(dotPos)
+                    : ".milk";
+
+                std::istringstream stream(ctx->fileData);
+                ctx->preset = m_presetFactoryManager->CreatePresetFromStream(extension, stream);
+
+                // Free the file data buffer — no longer needed.
+                std::string().swap(ctx->fileData);
+            }
+
+            if (!ctx->preset)
+            {
+                ctx->errorMessage = "Factory returned a null preset for \"" + ctx->path + "\".";
+                ctx->state.store(PresetSwitchState::Failed, std::memory_order_release);
+                return;
+            }
+        }
+        catch (const std::exception& ex)
+        {
+            LOG_ERROR("[ProcessPresetSwitch] Preset construction failed: " + std::string(ex.what()));
+            ctx->errorMessage = ex.what();
+            ctx->state.store(PresetSwitchState::Failed, std::memory_order_release);
+            return;
+        }
+
+#if PROJECTM_PRESET_SWITCH_TIMING
+        auto usConstruct = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - tConstructStart).count();
+        LOG_INFO("[StageGlWork] Construct=" + std::to_string(usConstruct / 1000.0f) + "ms");
+#endif
+
+#if PROJECTM_USE_WORKER_THREAD
+        // Tell Phase 0 to skip inline expression compilation —
+        // the worker handles transpile + expressions.
+        ctx->preset->SetExpressionsCompiled(true);
+
+        // Give the worker access to the texture manager so it can
+        // pre-decode texture images (CPU-only) in parallel.
+        ctx->textureManager = m_textureManager.get();
+
+        // Hand off to CPU worker for HLSL→GLSL transpile + expression
+        // bytecode compilation + texture preloading.  RunGlPhases will
+        // execute Phase 0/1/2 one per frame after the worker finishes.
+        ctx->state.store(PresetSwitchState::ExpressionCompiling, std::memory_order_release);
+        m_cpuWorker->SubmitExpressionCompile(ctx);
+#else
+        // Without a worker thread (e.g. Emscripten without pthreads),
+        // everything is synchronous.  Use the simple Initialize()
+        // path which does all phases in one shot.
+        try
+        {
+            ctx->preset->Initialize(GetRenderContext());
+        }
+        catch (const std::exception& ex)
+        {
+            LOG_ERROR("[ProcessPresetSwitch] Preset initialization failed: " + std::string(ex.what()));
+            ctx->errorMessage = ex.what();
+            ctx->state.store(PresetSwitchState::Failed, std::memory_order_release);
+            return;
+        }
+
+        ctx->state.store(PresetSwitchState::Activating, std::memory_order_release);
+#endif
+        return;
+    }
+}
+
+void ProjectM::RunGlPhases(std::shared_ptr<PresetSwitchContext>& ctx)
+{
+    if (ctx->cancelled.load(std::memory_order_acquire))
+    {
+        return;
+    }
+
+    // Run GL initialization phases.  Synchronous phases are collapsed
+    // into the same frame to minimise end-to-end latency.  We only
+    // yield back to the render loop when a phase has outstanding async
+    // work (e.g. GPU shader compilation via KHR_parallel_shader_compile).
+    while (ctx->glInitPhase < ctx->preset->InitializePhaseCount())
+    {
+        // If the current phase was already executed, check completion.
+        if (ctx->glInitPhaseExecuted)
+        {
+            if (!ctx->preset->IsPhaseComplete(ctx->glInitPhase))
+            {
+                // Async work still pending — poll again next frame.
+                return;
+            }
+
+            // Phase completed — advance to next.
+            ctx->glInitPhase++;
+            ctx->glInitPhaseExecuted = false;
+            continue;
+        }
+
+        // Execute the current phase.
+        try
+        {
+#if PROJECTM_PRESET_SWITCH_TIMING
+            auto tStart = std::chrono::steady_clock::now();
+#endif
+
+            ctx->preset->InitializePhase(GetRenderContext(), ctx->glInitPhase);
+
+#if PROJECTM_PRESET_SWITCH_TIMING
+            auto usPhase = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - tStart).count();
+            LOG_INFO("[RunGlPhases] Phase" + std::to_string(ctx->glInitPhase) +
+                     "=" + std::to_string(usPhase / 1000.0f) + "ms");
+#endif
+        }
+        catch (const std::exception& ex)
+        {
+            LOG_ERROR("[ProcessPresetSwitch] GL init phase " + std::to_string(ctx->glInitPhase) + " failed: " + std::string(ex.what()));
+            ctx->errorMessage = ex.what();
+            ctx->state.store(PresetSwitchState::Failed, std::memory_order_release);
+            return;
+        }
+        ctx->glInitPhaseExecuted = true;
+
+        // If this phase has async work in flight, yield and poll
+        // next frame.  Otherwise loop immediately to the next phase.
+        if (!ctx->preset->IsPhaseComplete(ctx->glInitPhase))
+        {
+            return;
+        }
+    }
+
+    // All phases done — activate immediately in this frame.
+    FinalizePresetActivation(ctx);
+}
+
+void ProjectM::FinalizePresetActivation(std::shared_ptr<PresetSwitchContext>& ctx)
+{
+    if (ctx->cancelled.load(std::memory_order_acquire))
+    {
+        return;
+    }
+
+    // Hand the fully-initialized preset to the transition logic.
+#if PROJECTM_PRESET_SWITCH_TIMING
+    auto tActivate = std::chrono::steady_clock::now();
+#endif
+    StartPresetTransition(std::move(ctx->preset), !ctx->smoothTransition);
+#if PROJECTM_PRESET_SWITCH_TIMING
+    auto usActivate = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - tActivate).count();
+    LOG_INFO("[PresetSwitch] Activate=" + std::to_string(usActivate / 1000.0f) + "ms");
+
+    m_framesAfterSwitch = 0;
+#endif
+
+    ctx->state.store(PresetSwitchState::Completed, std::memory_order_release);
 }
 
 auto ProjectM::GetRenderContext() -> Renderer::RenderContext

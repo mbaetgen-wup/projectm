@@ -10,10 +10,46 @@
 
 namespace libprojectM {
 
+namespace Renderer {
+class TextureManager;
+} // namespace Renderer
+
 class Preset
 {
 public:
     virtual ~Preset() = default;
+
+    /**
+     * @brief Pre-compiles CPU-only expression bytecode.
+     *
+     * This is pure CPU work (no GL dependency) that can safely be called
+     * on any thread before Initialize().  If called, Initialize() / phase 0
+     * will skip expression compilation, saving ~5-7ms on the render thread.
+     *
+     * The default implementation is a no-op.
+     */
+    virtual void CompileExpressions() {}
+
+    /**
+     * @brief Pre-decodes texture image files needed by this preset.
+     *
+     * Pure CPU work (stbi_load) — safe to call from any thread.
+     * Must be called after the constructor (which populates sampler names).
+     * The TextureManager stores the decoded pixel data; the subsequent
+     * GL thread phase will just upload to GPU without disk I/O.
+     *
+     * @param textureManager The texture manager to preload into.
+     */
+    virtual void PreloadTextures(Renderer::TextureManager* textureManager) { (void)textureManager; }
+
+    /**
+     * @brief Marks expression compilation as done (or to be skipped).
+     *
+     * Called by the render thread before running InitializePhase(0) when
+     * expression compilation has been submitted to the CPU worker thread.
+     * This prevents Phase 0 from redundantly compiling expressions inline.
+     */
+    virtual void SetExpressionsCompiled(bool compiled) { (void)compiled; }
 
     /**
      * @brief Initializes additional preset resources.
@@ -21,6 +57,60 @@ public:
      */
     virtual void Initialize(const Renderer::RenderContext& renderContext) = 0;
 
+    /**
+     * @brief Phased initialization for spreading GL work across frames.
+     *
+     * Returns the total number of phases.  The caller should call
+     * InitializePhase(renderContext, 0), then InitializePhase(renderContext, 1),
+     * etc., each on a separate frame, until phase == PhaseCount().
+     *
+     * The default implementation calls Initialize() in phase 0.
+     */
+    virtual int InitializePhaseCount() const { return 1; }
+
+    /**
+     * @brief Executes a single initialization phase.
+     * @param renderContext A render context with the initial data.
+     * @param phase The phase index (0-based).
+     */
+    virtual void InitializePhase(const Renderer::RenderContext& renderContext, int phase)
+    {
+        if (phase == 0)
+        {
+            Initialize(renderContext);
+        }
+    }
+
+    /**
+     * @brief Checks whether the current phase has completed its async work.
+     *
+     * Some phases may submit work (e.g. shader compilation) that completes
+     * asynchronously.  The caller should poll this method each frame after
+     * calling InitializePhase() and only advance to the next phase once
+     * it returns true.
+     *
+     * @param phase The phase index to check.
+     * @return true if the phase is complete (default: always true).
+     */
+    virtual bool IsPhaseComplete(int phase) const
+    {
+        (void)phase;
+        return true;
+    }
+
+    /**
+     * @brief Returns whether Initialize() has been called successfully.
+     * @return True if the preset has been initialized.
+     */
+    bool IsInitialized() const { return m_initialized; }
+
+protected:
+    /**
+     * @brief Sets the initialized flag.  Call from Initialize() implementations.
+     */
+    void SetInitialized() { m_initialized = true; }
+
+public:
     /**
      * @brief Renders the preset into the current framebuffer.
      * @param audioData Audio data to be used by the preset.
@@ -72,6 +162,7 @@ public:
 
 private:
     std::string m_filename;
+    bool m_initialized{false};
 };
 
 } // namespace libprojectM

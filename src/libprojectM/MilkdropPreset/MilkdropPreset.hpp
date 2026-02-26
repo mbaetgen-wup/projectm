@@ -38,6 +38,7 @@
 #include <Renderer/CopyTexture.hpp>
 #include <Renderer/Framebuffer.hpp>
 
+#include <atomic>
 #include <memory>
 #include <string>
 
@@ -67,10 +68,49 @@ public:
     MilkdropPreset(std::istream& presetData);
 
     /**
+     * @brief Compiles projectm-eval bytecode and runs per-frame init expressions.
+     *
+     * This is pure CPU work (no GL dependency) and can safely be called
+     * on any thread before Initialize() or InitializePhase(0).  If called
+     * before Initialize, the Phase 0 step will skip expression compilation.
+     */
+    void CompileExpressions();
+
+    void SetExpressionsCompiled(bool compiled) override;
+
+    /**
      * @brief Initializes the preset with rendering-related data.
      * @param renderContext The initial render context.
      */
     void Initialize(const Renderer::RenderContext& renderContext) override;
+
+    /**
+     * @brief Returns the number of phased initialization steps.
+     *
+     * Phase 0: setup, expression compile, framebuffer resize.
+     * Phase 1: submit warp + composite shaders for async compile.
+     * Phase 2: finalize warp + composite shader compilation.
+     */
+    int InitializePhaseCount() const override { return 3; }
+
+    /**
+     * @brief Executes a single initialization phase.
+     * @param renderContext A render context with the initial data.
+     * @param phase The phase index (0 = setup, 1 = submit shaders, 2 = finalize).
+     */
+    void InitializePhase(const Renderer::RenderContext& renderContext, int phase) override;
+
+    /**
+     * @brief Checks if the current phase's async work has completed.
+     *
+     * Phase 1 submits shaders for async compilation and returns immediately.
+     * IsPhaseComplete(1) polls GL_COMPLETION_STATUS_KHR to check if both
+     * the warp and composite shaders have finished compiling without blocking.
+     *
+     * @param phase The phase index.
+     * @return true if the phase has no outstanding async work.
+     */
+    bool IsPhaseComplete(int phase) const override;
 
     /**
      * @brief Renders the preset.
@@ -102,6 +142,23 @@ private:
      */
     void LoadShaderCode();
 
+    /**
+     * @brief Transpiles HLSL shader code to GLSL.
+     *
+     * Pure CPU string transformation — safe to call from any thread.
+     * Must be called after the constructor (which runs LoadWarpShader /
+     * LoadCompositeShader to create the MilkdropShader objects).
+     */
+    void TranspileShaders();
+
+    /**
+     * @brief Pre-decodes texture image files referenced by this preset's shaders.
+     *
+     * Collects sampler names from both the warp and composite shaders, then
+     * asks the TextureManager to scan for and decode the corresponding files.
+     */
+    void PreloadTextures(Renderer::TextureManager* textureManager) override;
+
     auto ParseFilename(const std::string& filename) -> std::string;
 
     std::string m_absoluteFilePath; //!< The absolute file path of the MilkdropPreset
@@ -129,6 +186,8 @@ private:
     FinalComposite m_finalComposite; //!< Final composite shader or filters.
 
     bool m_isFirstFrame{true}; //!< Controls drawing the motion vectors starting with the second frame.
+    std::atomic<bool> m_expressionsCompiled{false}; //!< True once expressions are compiled (or should be skipped by Phase 0).
+    std::atomic<bool> m_shadersTranspiled{false};   //!< True once TranspileShaders() (HLSL→GLSL) has run.
 };
 
 } // namespace MilkdropPreset

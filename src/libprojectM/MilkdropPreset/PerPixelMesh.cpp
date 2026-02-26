@@ -59,9 +59,25 @@ void PerPixelMesh::LoadWarpShader(const PresetState& presetState)
             catch (Renderer::ShaderException& ex)
             {
                 LOG_ERROR("[PerPixelMesh] Error loading warp shader code:" + ex.message());
-                LOG_DEBUG("[PerPixelMesh] Warp shader code:\n" + presetState.warpShader);
                 m_warpShader.reset();
             }
+        }
+    }
+}
+
+void PerPixelMesh::TranspileWarpShader()
+{
+    if (m_warpShader)
+    {
+        try
+        {
+            m_warpShader->TranspilePresetCode();
+            LOG_DEBUG("[PerPixelMesh] Successfully pre-transpiled warp shader code.");
+        }
+        catch (Renderer::ShaderException& ex)
+        {
+            LOG_WARN("[PerPixelMesh] Error pre-transpiling warp shader code: " + ex.message());
+            // Not fatal — TranspileHLSLShader will fall back to inline transpilation.
         }
     }
 }
@@ -78,6 +94,49 @@ void PerPixelMesh::CompileWarpShader(PresetState& presetState)
         catch (Renderer::ShaderException&)
         {
             LOG_ERROR("[PerPixelMesh] Error compiling warp shader code.");
+            m_warpShader.reset();
+        }
+    }
+}
+
+void PerPixelMesh::CompileWarpShaderAsync(PresetState& presetState)
+{
+    if (m_warpShader)
+    {
+        try
+        {
+            m_warpShader->LoadTexturesAndCompileAsync(presetState);
+            LOG_DEBUG("[PerPixelMesh] Submitted warp shader for async compilation.");
+        }
+        catch (Renderer::ShaderException&)
+        {
+            LOG_ERROR("[PerPixelMesh] Error submitting warp shader code.");
+            m_warpShader.reset();
+        }
+    }
+}
+
+auto PerPixelMesh::IsWarpShaderCompileComplete() const -> bool
+{
+    if (!m_warpShader)
+    {
+        return true; // No shader to wait for.
+    }
+    return m_warpShader->IsCompileComplete();
+}
+
+void PerPixelMesh::FinalizeWarpShaderCompile()
+{
+    if (m_warpShader)
+    {
+        try
+        {
+            m_warpShader->FinalizeCompile();
+            LOG_DEBUG("[PerPixelMesh] Finalized async warp shader compilation.");
+        }
+        catch (Renderer::ShaderException&)
+        {
+            LOG_ERROR("[PerPixelMesh] Async warp shader compilation failed.");
             m_warpShader.reset();
         }
     }

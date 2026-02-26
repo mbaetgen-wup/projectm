@@ -40,6 +40,8 @@ add_library(Renderer OBJECT
         Platform/GLProbe.hpp
         Platform/GLResolver.cpp
         Platform/GLResolver.hpp
+        Platform/ParallelShaderProbe.cpp
+        Platform/ParallelShaderProbe.hpp
         Point.hpp
         PresetTransition.cpp
         PresetTransition.hpp
