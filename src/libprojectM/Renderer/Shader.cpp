@@ -169,15 +169,26 @@ auto Shader::IsCompileComplete() const -> bool
                           &fragmentDone);
             if (vertexDone == GL_TRUE && fragmentDone == GL_TRUE)
             {
-                // Both shaders compiled — advance to linking.
-                // We use const_cast here because IsCompileComplete is logically
-                // const from the caller's perspective (it's a poll), but we need
-                // to transition the internal state machine.
+                // Both shaders compiled — transition to ReadyToLink and
+                // yield this frame.  Calling glLinkProgram here would block
+                // on some drivers, stalling the render thread.  By deferring
+                // the link to the next frame we keep this poll cheap.
                 auto* self = const_cast<Shader*>(this);
-                self->AdvanceToLinking();
-                return false; // Return false to give the link at least one frame.
+                self->m_asyncState = AsyncState::ReadyToLink;
+                return false;
             }
             return false;
+        }
+
+        case AsyncState::ReadyToLink:
+        {
+            // Shaders are compiled.  Submit the link now — this is the
+            // first poll after we detected compile completion, so any
+            // blocking in glLinkProgram is isolated to this frame.
+            auto* self = const_cast<Shader*>(this);
+            self->AdvanceToLinking();
+            glFlush(); // Hint driver to start linking immediately.
+            return false; // Give the link at least one frame.
         }
 
         case AsyncState::LinkingProgram:

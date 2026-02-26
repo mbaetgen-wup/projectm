@@ -275,6 +275,7 @@ private:
     {
         None,              //!< No async compilation pending.
         CompilingShaders,  //!< Shaders submitted, waiting for compile completion.
+        ReadyToLink,       //!< Shaders compiled, ready to submit link next frame.
         LinkingProgram,    //!< Shaders compiled, program link submitted, waiting for completion.
         Complete           //!< Link complete, ready for FinalizeCompile().
     };

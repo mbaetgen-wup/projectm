@@ -352,6 +352,9 @@ private:
 
     /** Timing information */
     int m_frameCount{0}; //!< Rendered frame count since start
+#if PROJECTM_PRESET_SWITCH_TIMING
+    int m_framesAfterSwitch{-1}; //!< Counts frames after preset activation, -1 when not tracking.
+#endif
 
     bool m_presetLocked{false};         //!< If true, the preset change event will not be sent.
     bool m_presetChangeNotified{false}; //!< Stores whether the user has been notified that projectM wants to switch the preset.

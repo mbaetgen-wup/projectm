@@ -102,7 +102,17 @@ void ProjectM::LoadPresetFile(const std::string& presetFilename, bool smoothTran
     }
 
     // Asynchronous path — offload file I/O to the background thread.
+#if PROJECTM_PRESET_SWITCH_TIMING
+    {
+        auto tPurge = std::chrono::steady_clock::now();
+        m_textureManager->PurgeTextures();
+        auto usPurge = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - tPurge).count();
+        LOG_INFO("[PresetSwitch] PurgeTextures=" + std::to_string(usPurge / 1000.0f) + "ms");
+    }
+#else
     m_textureManager->PurgeTextures();
+#endif
 
     auto ctx = std::make_shared<PresetSwitchContext>();
     ctx->path = presetFilename;
@@ -170,11 +180,19 @@ void ProjectM::RenderFrame(uint32_t targetFramebufferObject /*= 0*/)
         return;
     }
 
+#if PROJECTM_PRESET_SWITCH_TIMING
+    auto tFrameStart = std::chrono::steady_clock::now();
+#endif
+
     // Drive the asynchronous preset switch state machine.
     if (m_activeSwitch)
     {
         ProcessPresetSwitch();
     }
+
+#if PROJECTM_PRESET_SWITCH_TIMING
+    auto tAfterSwitch = std::chrono::steady_clock::now();
+#endif
 
     // Update FPS and other timer values.
     m_timeKeeper->UpdateTimers();
@@ -230,9 +248,18 @@ void ProjectM::RenderFrame(uint32_t targetFramebufferObject /*= 0*/)
     {
         if (m_transition->IsDone(m_timeKeeper->GetFrameTime()))
         {
+#if PROJECTM_PRESET_SWITCH_TIMING
+            auto tTransEnd = std::chrono::steady_clock::now();
+#endif
             m_activePreset = std::move(m_transitioningPreset);
             m_transitioningPreset.reset();
             m_transition.reset();
+#if PROJECTM_PRESET_SWITCH_TIMING
+            auto usTransEnd = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - tTransEnd).count();
+            LOG_INFO("[PresetSwitch] TransitionEnd=" + std::to_string(usTransEnd / 1000.0f)
+                + "ms (old preset destroyed)");
+#endif
         }
         else
         {
@@ -270,6 +297,37 @@ void ProjectM::RenderFrame(uint32_t targetFramebufferObject /*= 0*/)
 
     m_frameCount++;
     m_previousFrameVolume = audioData.vol;
+
+#if PROJECTM_PRESET_SWITCH_TIMING
+    // Frame-time spike detection.  Log the first few frames after a
+    // preset switch and any frame that exceeds a threshold.
+    if (m_framesAfterSwitch >= 0)
+    {
+        m_framesAfterSwitch++;
+    }
+
+    auto usFrame = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - tFrameStart).count();
+    auto usSwitch = std::chrono::duration_cast<std::chrono::microseconds>(
+        tAfterSwitch - tFrameStart).count();
+    float msFrame = usFrame / 1000.0f;
+    float msSwitch = usSwitch / 1000.0f;
+    float msRender = (usFrame - usSwitch) / 1000.0f;
+
+    if (m_framesAfterSwitch >= 0 && m_framesAfterSwitch <= 5)
+    {
+        LOG_INFO("[FrameTime] after_switch=" + std::to_string(m_framesAfterSwitch)
+            + " total=" + std::to_string(msFrame)
+            + "ms switch=" + std::to_string(msSwitch)
+            + "ms render=" + std::to_string(msRender) + "ms");
+    }
+    else if (msFrame > 12.0f)
+    {
+        LOG_INFO("[FrameTime] SPIKE total=" + std::to_string(msFrame)
+            + "ms switch=" + std::to_string(msSwitch)
+            + "ms render=" + std::to_string(msRender) + "ms");
+    }
+#endif
 }
 
 void ProjectM::Initialize()
@@ -365,7 +423,15 @@ void ProjectM::StartPresetTransition(std::unique_ptr<Preset>&& preset, bool hard
 
     if (m_activePreset && !m_presetStartClean)
     {
+#if PROJECTM_PRESET_SWITCH_TIMING
+        auto tDraw = std::chrono::steady_clock::now();
+#endif
         preset->DrawInitialImage(m_activePreset->OutputTexture(), GetRenderContext());
+#if PROJECTM_PRESET_SWITCH_TIMING
+        auto usDraw = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - tDraw).count();
+        LOG_INFO("[PresetSwitch] DrawInitialImage=" + std::to_string(usDraw / 1000.0f) + "ms");
+#endif
     }
 
     if (hardCut)
@@ -377,7 +443,15 @@ void ProjectM::StartPresetTransition(std::unique_ptr<Preset>&& preset, bool hard
     {
         m_transitioningPreset = std::move(preset);
         m_timeKeeper->StartSmoothing();
+#if PROJECTM_PRESET_SWITCH_TIMING
+        auto tTransition = std::chrono::steady_clock::now();
+#endif
         m_transition = std::make_unique<Renderer::PresetTransition>(m_transitionShaderManager->RandomTransition(), m_softCutDuration, m_timeKeeper->GetFrameTime());
+#if PROJECTM_PRESET_SWITCH_TIMING
+        auto usTransition = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - tTransition).count();
+        LOG_INFO("[PresetSwitch] TransitionSetup=" + std::to_string(usTransition / 1000.0f) + "ms");
+#endif
     }
 }
 
@@ -714,7 +788,9 @@ void ProjectM::StageGlWork(std::shared_ptr<PresetSwitchContext>& ctx)
 
     if (!ctx->preset)
     {
+#if PROJECTM_PRESET_SWITCH_TIMING
         auto tConstructStart = std::chrono::steady_clock::now();
+#endif
         try
         {
             if (ctx->fileData.empty())
@@ -750,9 +826,11 @@ void ProjectM::StageGlWork(std::shared_ptr<PresetSwitchContext>& ctx)
             return;
         }
 
+#if PROJECTM_PRESET_SWITCH_TIMING
         auto usConstruct = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - tConstructStart).count();
         LOG_INFO("[StageGlWork] Construct=" + std::to_string(usConstruct / 1000.0f) + "ms");
+#endif
 
 #if PROJECTM_USE_WORKER_THREAD
         // Tell Phase 0 to skip inline expression compilation —
@@ -821,14 +899,18 @@ void ProjectM::RunGlPhases(std::shared_ptr<PresetSwitchContext>& ctx)
         // Execute the current phase.
         try
         {
+#if PROJECTM_PRESET_SWITCH_TIMING
             auto tStart = std::chrono::steady_clock::now();
+#endif
 
             ctx->preset->InitializePhase(GetRenderContext(), ctx->glInitPhase);
 
+#if PROJECTM_PRESET_SWITCH_TIMING
             auto usPhase = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - tStart).count();
             LOG_INFO("[RunGlPhases] Phase" + std::to_string(ctx->glInitPhase) +
                      "=" + std::to_string(usPhase / 1000.0f) + "ms");
+#endif
         }
         catch (const std::exception& ex)
         {
@@ -859,7 +941,17 @@ void ProjectM::FinalizePresetActivation(std::shared_ptr<PresetSwitchContext>& ct
     }
 
     // Hand the fully-initialized preset to the transition logic.
+#if PROJECTM_PRESET_SWITCH_TIMING
+    auto tActivate = std::chrono::steady_clock::now();
+#endif
     StartPresetTransition(std::move(ctx->preset), !ctx->smoothTransition);
+#if PROJECTM_PRESET_SWITCH_TIMING
+    auto usActivate = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - tActivate).count();
+    LOG_INFO("[PresetSwitch] Activate=" + std::to_string(usActivate / 1000.0f) + "ms");
+
+    m_framesAfterSwitch = 0;
+#endif
 
     ctx->state.store(PresetSwitchState::Completed, std::memory_order_release);
 }

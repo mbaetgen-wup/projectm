@@ -201,6 +201,9 @@ bool MilkdropPreset::IsPhaseComplete(int phase) const
         case 1:
             // Phase 1 submitted async shader compiles.
             // Poll completion status without blocking.
+            // Short-circuit && ensures only one shader advances its
+            // state machine per frame, preventing two glLinkProgram
+            // calls from blocking the same frame.
             return m_perPixelMesh.IsWarpShaderCompileComplete()
                 && m_finalComposite.IsCompositeShaderCompileComplete();
 
